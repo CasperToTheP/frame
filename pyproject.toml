@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frame"
+version = "0.1.0"
+description = "Raspberry Pi digital art frame: looping fullscreen video with a small web UI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "Flask>=2.2,<4",
+    "waitress>=2.1,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+frame-web = "frame.web:main"
+frame-player = "frame.player_service:main"
+
+[tool.setuptools]
+packages = ["frame"]
+
+[tool.setuptools.package-data]
+frame = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

@@ -1,0 +1,7 @@
+# Scripts and unit files run on Linux: always keep LF line endings,
+# even when the repo is checked out on Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.mp4 binary
