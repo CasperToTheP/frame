@@ -1,0 +1,41 @@
+[Unit]
+Description=Frame artwork player (supervised fullscreen mpv)
+Documentation=https://github.com/CasperToTheP/frame
+# The player owns the HDMI screen; keep the login prompt off it.
+Conflicts=getty@tty1.service
+After=systemd-tmpfiles-setup.service sound.target local-fs.target
+Wants=sound.target
+# The supervisor backs off internally (1s..60s) and systemd adds RestartSec on
+# top, so a permanently broken setup retries slowly instead of spinning. It
+# never gives up: an art frame should heal itself once the fault goes away.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=frame
+Group=frame
+SupplementaryGroups=video render audio
+EnvironmentFile=-/etc/default/frame
+Environment=PYTHONUNBUFFERED=1 HOME=/var/lib/frame
+WorkingDirectory=/var/lib/frame
+ExecStart=/opt/frame/venv/bin/python -m frame.player_service
+Restart=always
+RestartSec=5
+# Stop mpv along with the supervisor.
+KillMode=control-group
+TimeoutStopSec=10
+# Smooth playback beats everything else on this box.
+Nice=-5
+
+# Hardening (mpv needs /dev/dri and /dev/snd, so devices stay visible).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/frame /run/frame
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Installed as /etc/avahi/services/frame.service: advertises the web UI. -->
+<service-group>
+  <name replace-wildcards="yes">Frame on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>8080</port>
+  </service>
+</service-group>
