@@ -76,6 +76,9 @@ uses whatever mode the display prefers.
 
 ## Prepare the Raspberry Pi
 
+First time setting up a Pi? [docs/pi-setup.md](docs/pi-setup.md) walks through every step
+in more detail, and ends with a checklist for testing the frame on real hardware.
+
 1. Install **Raspberry Pi Imager** on your computer and choose:
    - Device: *Raspberry Pi 4*
    - OS: *Raspberry Pi OS (other)* → **Raspberry Pi OS Lite (64-bit)**. Frame doesn't need the desktop.
@@ -397,3 +400,7 @@ These are deliberately not in version 1:
 - Optional password for the web UI. `check_access()` in `frame/web.py` is the single place
   to add it.
 - Playlists or rotating artwork, thumbnails, Home Assistant integration.
+
+## Licence
+
+[MIT](LICENSE)
