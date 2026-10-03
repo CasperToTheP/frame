@@ -7,6 +7,7 @@
 APP_DIR=/opt/frame
 DATA_DIR=/var/lib/frame
 SOCK=/run/frame/mpv.sock
+AUDIO_SOCK=/run/frame/audio.sock
 
 h()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 kv() { printf '  %-22s %s\n' "$1" "$2"; }
@@ -91,14 +92,22 @@ if [[ -S $SOCK ]]; then
   QUERY='
 import json
 from frame.player import MpvIpc, PlayerError
-ipc = MpvIpc("'"$SOCK"'")
-try:
-    for p in ["pid", "path", "pause", "idle-active", "volume", "mute", "video-rotate",
-              "hwdec-current", "audio-device", "current-ao", "current-vo",
-              "width", "height", "estimated-vf-fps", "frame-drop-count"]:
-        print("  %-22s %s" % (p, json.dumps(ipc.get(p))))
-except PlayerError as e:
-    print("  FAIL  IPC query failed:", e)
+players = [
+    ("Artwork player", "'"$SOCK"'",
+     ["pid", "path", "pause", "idle-active", "volume", "mute", "video-rotate", "aid",
+      "hwdec-current", "audio-device", "current-ao", "current-vo",
+      "width", "height", "estimated-vf-fps", "frame-drop-count"]),
+    ("Soundtrack player", "'"$AUDIO_SOCK"'",
+     ["pid", "path", "pause", "idle-active", "volume", "mute", "audio-device", "current-ao"]),
+]
+for title, sock, props in players:
+    print("  " + title)
+    ipc = MpvIpc(sock)
+    try:
+        for p in props:
+            print("    %-22s %s" % (p, json.dumps(ipc.get(p))))
+    except PlayerError as e:
+        print("    FAIL  IPC query failed:", e)
 '
   if [[ -r $SOCK && -w $SOCK ]]; then
     "$PY" -c "$QUERY" 2>&1

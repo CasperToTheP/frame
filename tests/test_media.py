@@ -2,9 +2,9 @@ import os
 
 import pytest
 
-from frame.media import MediaError, MediaLibrary, safe_name
+from frame.media import MediaError, MediaLibrary, kind_of, safe_name, sniff_ok
 
-from .conftest import MKV, MP4, PNG
+from .conftest import MKV, MP3, MP4, PNG, SVG, WEBP, WEBP_ANIMATED
 
 
 @pytest.mark.parametrize(
@@ -119,3 +119,73 @@ def test_clean_incoming(lib):
     f.close()
     lib.clean_incoming()
     assert list(lib.incoming.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "name, head",
+    [
+        ("a.webp", WEBP),
+        ("a.bmp", b"BM" + b"\x00" * 20),
+        ("a.tiff", b"II*\x00" + b"\x00" * 20),
+        ("a.tif", b"MM\x00*" + b"\x00" * 20),
+        ("a.svg", SVG),
+        ("a.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+        ("a.mp3", MP3),
+        ("a.mp3", b"\xff\xfb\x90\x64" + b"\x00" * 20),
+        ("a.m4a", MP4),
+        ("a.aac", b"\xff\xf1\x50\x80" + b"\x00" * 20),
+        ("a.wav", b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 20),
+        ("a.flac", b"fLaC" + b"\x00" * 20),
+        ("a.ogg", b"OggS" + b"\x00" * 20),
+        ("a.opus", b"OggS" + b"\x00" * 20),
+    ],
+)
+def test_sniff_accepts_new_formats(tmp_path, name, head):
+    path = tmp_path / name
+    path.write_bytes(head)
+    assert sniff_ok(path, os.path.splitext(name)[1])
+
+
+@pytest.mark.parametrize("name", ["a.webp", "a.svg", "a.mp3", "a.wav", "a.flac", "a.ogg"])
+def test_sniff_rejects_text_as_new_formats(tmp_path, name):
+    path = tmp_path / name
+    path.write_bytes(b"just some text, not media")
+    assert not sniff_ok(path, os.path.splitext(name)[1])
+
+
+def test_kinds():
+    assert kind_of("x.MP3") == "audio"
+    assert kind_of("x.webp") == "image"
+    assert kind_of("x.gif") == "animation"
+    assert kind_of("x.txt") is None
+
+
+def test_still_webp_accepted_animated_rejected(lib):
+    assert upload(lib, "still.webp", WEBP) == "still.webp"
+    f = lib.new_incoming_file()
+    f.write(WEBP_ANIMATED)
+    f.close()
+    with pytest.raises(MediaError, match="animated WebP") as e:
+        lib.add(f.name, "anim.webp")
+    assert e.value.status == 415
+    assert not os.path.exists(f.name)
+
+
+def test_svg_without_converter_is_a_clear_error(lib, monkeypatch):
+    monkeypatch.setattr("frame.media.shutil.which", lambda name: None)
+    f = lib.new_incoming_file()
+    f.write(SVG)
+    f.close()
+    with pytest.raises(MediaError, match="librsvg2-bin"):
+        lib.add(f.name, "logo.svg")
+    assert list(lib.incoming.iterdir()) == []
+
+
+def test_soundtrack_needs_visual_and_existing_audio(lib):
+    upload(lib, "a.mp4", MP4)
+    upload(lib, "song.mp3", MP3)
+    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "song.mp3"}).name == "song.mp3"
+    assert lib.soundtrack({"current": None, "soundtrack": "song.mp3"}) is None
+    assert lib.soundtrack({"current": "gone.mp4", "soundtrack": "song.mp3"}) is None
+    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "gone.mp3"}) is None
+    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "a.mp4"}) is None

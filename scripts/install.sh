@@ -58,11 +58,11 @@ step "Installing Frame on: $MODEL"
 info "source: $REPO_DIR"
 
 # --- packages -----------------------------------------------------------------
-step "Installing system packages (mpv, Python, Avahi, ALSA tools)"
+step "Installing system packages (mpv, Python, Avahi, ALSA tools, SVG renderer)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
-  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates
+  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates librsvg2-bin
 info "$(mpv --version | head -n1)"
 
 PY_OK=$(python3 -c 'import sys; print(int(sys.version_info >= (3, 11)))')

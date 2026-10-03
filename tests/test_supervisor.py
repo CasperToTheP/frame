@@ -2,11 +2,19 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from frame import player_service
 from frame.player_service import MAX_BACKOFF, MIN_BACKOFF, Supervisor, next_backoff
 from frame.state import StateStore
 
 from .conftest import MP4
+
+
+@pytest.fixture(autouse=True)
+def mpv_035(monkeypatch):
+    # Don't run a real "mpv --version"; pretend to be Bookworm's mpv.
+    monkeypatch.setattr(player_service, "mpv_version", lambda mpv_bin: (0, 35))
 
 
 def test_backoff_grows_and_caps():
@@ -59,19 +67,44 @@ def test_start_mpv_uses_saved_state_and_display(cfg, monkeypatch):
     has_sysfs, connector, _ = sup._display_snapshot()
     assert has_sysfs and connector.name == "HDMI-A-1"
     sup.start_mpv(connector)
-    args = FakePopen.instances[-1].args
+    args, audio_args = FakePopen.instances[-2].args, FakePopen.instances[-1].args
     assert "--volume=12" in args and "--video-rotate=180" in args
     assert "--drm-device=/dev/dri/card1" in args
     assert "--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0" in args
     assert args[-1].endswith("a.mp4")
+    assert "--aid=no" not in args
+    assert "--alpha=blend" in args
+    # The audio-only player idles: no soundtrack chosen.
+    assert "--no-video" in audio_args and "--" not in audio_args
+    assert "--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0" in audio_args
     assert cfg.player_status_file.exists()
+
+
+def test_start_mpv_with_soundtrack(cfg, monkeypatch):
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    cfg.media_dir.mkdir(parents=True)
+    (cfg.media_dir / "a.png").write_bytes(MP4)
+    (cfg.media_dir / "song.mp3").write_bytes(MP4)
+    StateStore(cfg.state_file).update(current="a.png", soundtrack="song.mp3", volume=33)
+    Supervisor(cfg).start_mpv(None)
+    args, audio_args = FakePopen.instances[-2].args, FakePopen.instances[-1].args
+    assert "--aid=no" in args
+    assert audio_args[-1].endswith("song.mp3") and "--volume=33" in audio_args
+
+
+def test_watch_restarts_pair_when_audio_player_dies(cfg, monkeypatch):
+    sup, stopped = running_supervisor(cfg, monkeypatch, lambda: None)
+    sup.audio_proc = FakePopen(["mpv"])
+    sup.audio_proc.returncode = 1
+    assert sup.watch(frozenset()) == "audio player exited with code 1"
+    assert stopped == ["audio player exited"]
 
 
 def test_start_mpv_with_missing_artwork_shows_black(cfg, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
     StateStore(cfg.state_file).update(current="gone.mp4")
     Supervisor(cfg).start_mpv(None)
-    assert "--" not in FakePopen.instances[-1].args
+    assert "--" not in FakePopen.instances[-2].args
 
 
 def test_restarts_mpv_after_crash(cfg):
@@ -84,11 +117,15 @@ def test_restarts_mpv_after_crash(cfg):
     sup = Supervisor(cfg)
 
     real_build = player_service.build_mpv_args
+    real_audio = player_service.build_audio_args
 
     def build(*a, **kw):
         return [sys.executable, str(script)] + real_build(*a, **kw)[1:2]
 
     player_service.build_mpv_args = build
+    # The audio player just stays up.
+    player_service.build_audio_args = lambda *a, **kw: [
+        sys.executable, "-c", "import time; time.sleep(30)"]
     sleeps = []
 
     def fake_sleep(seconds):
@@ -102,6 +139,7 @@ def test_restarts_mpv_after_crash(cfg):
         sup.run()
     finally:
         player_service.build_mpv_args = real_build
+        player_service.build_audio_args = real_audio
     assert sup.restarts >= 2
     assert sup.last_exit == 3
     assert any(s >= 4 for s in sleeps)  # backoff grew

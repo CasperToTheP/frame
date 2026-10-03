@@ -91,7 +91,7 @@ ul.media li.playing { background: var(--playing); border-radius: 10px; }
 .meta { font-size: .85rem; }
 .actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-#settings label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
+#settings label, #now label.sound { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
 select { font: inherit; min-height: 40px; padding: 4px 8px; border-radius: 8px; max-width: 60%; }
 details { margin-top: 8px; }
 summary { cursor: pointer; color: var(--muted); padding: 6px 0; }

@@ -14,19 +14,29 @@ from typing import Any
 
 from . import display
 from .config import Config
-from .media import MediaError, MediaLibrary
-from .player import InvalidMedia, MpvIpc, PlayerError, PlayerUnavailable, fit_properties
+from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
+from .player import (
+    InvalidMedia,
+    MpvIpc,
+    PlayerError,
+    PlayerUnavailable,
+    fit_properties,
+    scale_filter,
+)
 from .state import StateStore
 
 log = logging.getLogger("frame.control")
 
 
 class Controller:
-    def __init__(self, cfg: Config, ipc: MpvIpc | None = None):
+    def __init__(self, cfg: Config, ipc: MpvIpc | None = None,
+                 audio_ipc: MpvIpc | None = None):
         self.cfg = cfg
         self.state = StateStore(cfg.state_file)
         self.library = MediaLibrary(cfg.media_dir, cfg.incoming_dir)
         self.ipc = ipc or MpvIpc(cfg.mpv_socket)
+        # The audio-only mpv that loops a separate soundtrack.
+        self.audio_ipc = audio_ipc or MpvIpc(cfg.audio_socket)
 
     # --- status -------------------------------------------------------------
 
@@ -34,10 +44,12 @@ class Controller:
         state = self.state.load()
         out: dict[str, Any] = {
             "current": state["current"],
+            "soundtrack": state["soundtrack"],
             "volume": state["volume"],
             "muted": state["muted"],
             "rotation": state["rotation"],
             "fit": state["fit"],
+            "scaling": state["scaling"],
             "audio_device": state["audio_device"],
             "hwdec": state["hwdec"],
             "player": {"reachable": False},
@@ -56,6 +68,10 @@ class Controller:
             out["playback"] = "idle" if idle else ("paused" if paused else "playing")
         except PlayerUnavailable:
             out["playback"] = "player offline"
+        try:
+            out["player"]["soundtrack_file"] = _basename(self.audio_ipc.get("path"))
+        except PlayerUnavailable:
+            out["player"]["soundtrack_file"] = None
         out["player"].update(self._supervisor_status())
         return out
 
@@ -77,6 +93,8 @@ class Controller:
     def play(self, name: str) -> dict[str, Any]:
         """Select artwork. Returns {"warning": ...} if the player is offline."""
         path = self.library.resolve(name)
+        if kind_of(name) not in VISUAL_KINDS:
+            raise MediaError(f"{name} is an audio file; choose it under Sound instead")
         previous = self.state.load()["current"]
         try:
             self.ipc.load(path)
@@ -91,7 +109,67 @@ class Controller:
             return {"warning": "Player is not running; the artwork will start when it recovers."}
         self.state.update(current=name)
         log.info("artwork changed to %s", name)
+        self._quiet_sync_sound()
         return {}
+
+    def set_soundtrack(self, name: str | None) -> dict[str, Any]:
+        """Play ``name`` (an audio file) instead of the artwork's own sound.
+
+        ``None`` goes back to the artwork's own sound. The soundtrack loops on
+        its own, independently of the visual.
+        """
+        if name is not None:
+            self.library.resolve(name)
+            if kind_of(name) != "audio":
+                raise MediaError(f"{name} is not an audio file")
+        previous = self.state.load()["soundtrack"]
+        self.state.update(soundtrack=name)
+        try:
+            self._sync_sound()
+        except InvalidMedia as exc:
+            log.error("invalid soundtrack %s: %s", name, exc)
+            self.state.update(soundtrack=previous)
+            self._quiet_sync_sound()
+            raise MediaError(f"cannot play {name}: {exc}", 422) from exc
+        except PlayerUnavailable:
+            log.warning("sound set to %s but player is offline", name or "artwork's own")
+            return {"warning": "Player is not running; the sound will start when it recovers."}
+        log.info("sound changed to %s", name or "artwork's own")
+        return {}
+
+    def _sync_sound(self) -> None:
+        """Make the two players match the saved soundtrack choice.
+
+        Only one mpv may hold the HDMI audio device at a time, so the order
+        matters: the one that goes quiet releases the device first.
+        """
+        state = self.state.load()
+        path = self.library.soundtrack(state)
+        if path is not None:
+            self._quiet_set("aid", "no")
+            if self.audio_ipc.get("path") != str(path):
+                self.audio_ipc.load(path)
+            self.audio_ipc.set("pause", False)
+        else:
+            self._quiet_audio("stop")
+            self._wait_audio_idle()
+            self._quiet_set("aid", "auto")
+
+    def _quiet_sync_sound(self) -> None:
+        try:
+            self._sync_sound()
+        except PlayerError as exc:
+            log.warning("could not restore sound: %s", exc)
+
+    def _wait_audio_idle(self, timeout: float = 1.0) -> None:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                if self.audio_ipc.get("idle-active", True):
+                    return
+            except PlayerUnavailable:
+                return
+            time.sleep(0.05)
 
     def _restore(self, previous: str | None) -> None:
         try:
@@ -103,22 +181,26 @@ class Controller:
             log.warning("could not restore previous artwork: %s", exc)
 
     def stop(self) -> None:
-        """Show a black screen and forget the current artwork."""
+        """Show a black screen and forget the current artwork. Also silences the soundtrack."""
         self.state.update(current=None)
         self._quiet_command("stop")
+        self._quiet_audio("stop")
         log.info("playback stopped")
 
     def pause(self) -> None:
         self.ipc.set("pause", True)
+        self._quiet_audio("set", "pause", True)
         log.info("paused")
 
     def resume(self) -> None:
         self.ipc.set("pause", False)
+        self._quiet_audio("set", "pause", False)
         log.info("resumed")
 
     def set_volume(self, volume: Any) -> int:
         state = self.state.update(volume=volume)
         self._quiet_set("volume", state["volume"])
+        self._quiet_audio("set", "volume", state["volume"])
         return state["volume"]
 
     def set_muted(self, muted: bool | None = None) -> bool:
@@ -126,12 +208,13 @@ class Controller:
             muted = not self.state.load()["muted"]
         state = self.state.update(muted=muted)
         self._quiet_set("mute", state["muted"])
+        self._quiet_audio("set", "mute", state["muted"])
         log.info("muted" if state["muted"] else "unmuted")
         return state["muted"]
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         """Display/audio settings. All are applied live, without restarting mpv."""
-        allowed = {"rotation", "fit", "audio_device", "hwdec"}
+        allowed = {"rotation", "fit", "scaling", "audio_device", "hwdec"}
         unknown = set(changes) - allowed
         if unknown:
             raise MediaError(f"unknown setting(s): {', '.join(sorted(unknown))}")
@@ -141,6 +224,8 @@ class Controller:
         if "fit" in changes:
             for prop, value in fit_properties(state["fit"]).items():
                 self._quiet_set(prop, value)
+        if "scaling" in changes:
+            self._quiet_set("scale", scale_filter(state["scaling"]))
         if "hwdec" in changes:
             self._quiet_set("hwdec", state["hwdec"])
         if "audio_device" in changes:
@@ -150,6 +235,7 @@ class Controller:
                 connector = display.pick_connector(display.list_connectors(self.cfg.sys_drm))
                 device = display.hdmi_audio_device(connector, self.cfg.proc_asound) or "auto"
             self._quiet_set("audio-device", device)
+            self._quiet_audio("set", "audio-device", device)
         log.info("settings changed: %s", ", ".join(f"{k}={state[k]}" for k in changes))
         return {k: state[k] for k in allowed}
 
@@ -167,12 +253,25 @@ class Controller:
     # --- library ------------------------------------------------------------
 
     def media(self) -> list[dict[str, Any]]:
-        current = self.state.load()["current"]
-        return [dict(item.to_dict(), current=item.name == current) for item in self.library.list()]
+        state = self.state.load()
+        return [
+            dict(item.to_dict(), current=item.name == state["current"],
+                 soundtrack=item.name == state["soundtrack"])
+            for item in self.library.list()
+        ]
 
     def delete(self, name: str, force: bool = False) -> None:
         self.library.resolve(name)  # validates / 404s first
-        if name == self.state.load()["current"]:
+        state = self.state.load()
+        if name == state["soundtrack"]:
+            if not force:
+                raise MediaError(
+                    f"{name} is the selected sound; choose another sound first "
+                    "or delete with force",
+                    409,
+                )
+            self.set_soundtrack(None)
+        if name == state["current"]:
             if not force:
                 raise MediaError(
                     f"{name} is currently playing; choose other artwork first "
@@ -193,6 +292,18 @@ class Controller:
             pass
         except PlayerError as exc:
             log.warning("mpv rejected %s=%r: %s", prop, value, exc)
+
+    def _quiet_audio(self, *args: Any) -> None:
+        """Command or ("set", prop, value) for the audio-only mpv; failures are logged."""
+        try:
+            if args[0] == "set":
+                self.audio_ipc.set(args[1], args[2])
+            else:
+                self.audio_ipc.command(*args)
+        except PlayerUnavailable:
+            pass
+        except PlayerError as exc:
+            log.warning("audio player rejected %s: %s", args, exc)
 
     def _quiet_command(self, *args: Any) -> None:
         try:

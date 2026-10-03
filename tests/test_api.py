@@ -1,17 +1,18 @@
 import io
 import json
+import shutil
 
 import pytest
 
 from frame.controller import Controller
 from frame.web import create_app
 
-from .conftest import MKV, MP4
+from .conftest import MKV, MP3, MP4, PNG, SVG, WEBP_ANIMATED
 
 
 @pytest.fixture
-def ctl(cfg, ipc):
-    return Controller(cfg, ipc=ipc)
+def ctl(cfg, ipc, audio_ipc):
+    return Controller(cfg, ipc=ipc, audio_ipc=audio_ipc)
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def test_upload_list_and_no_autoplay(client, ipc, cfg):
     media = client.get("/api/media").get_json()["media"]
     assert media == [
         {"name": "Sea_Waves.mp4", "kind": "video", "size": len(MP4),
-         "mtime": media[0]["mtime"], "current": False}
+         "mtime": media[0]["mtime"], "current": False, "soundtrack": False}
     ]
     assert list(cfg.incoming_dir.iterdir()) == []
 
@@ -261,3 +262,136 @@ def test_supervisor_status_is_reported(client, cfg):
     player = client.get("/api/status").get_json()["player"]
     assert player["restarts"] == 2
     assert player["display"] == "card1-HDMI-A-1"
+
+
+# --- formats and soundtracks --------------------------------------------------
+
+
+def test_upload_animated_webp_explains(client, cfg):
+    res = post_file(client, "punk.webp", WEBP_ANIMATED)
+    assert res.status_code == 415
+    assert "animated WebP" in res.get_json()["error"]
+    assert list(cfg.incoming_dir.iterdir()) == []
+
+
+def test_audio_file_cannot_be_played_as_artwork(client):
+    post_file(client, "song.mp3", MP3)
+    res = client.post("/api/play", json={"filename": "song.mp3"})
+    assert res.status_code == 400
+    assert "Sound" in res.get_json()["error"]
+
+
+def test_soundtrack_replaces_artwork_sound(client, ipc, audio_ipc, ctl):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "song.mp3", MP3)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    res = client.post("/api/soundtrack", json={"filename": "song.mp3"})
+    assert res.status_code == 200
+    # The artwork's own sound goes off before the audio player takes the device.
+    assert ("set", "aid", "no") in ipc.calls
+    assert ("load", "song.mp3") in audio_ipc.calls
+    assert ctl.state.load()["soundtrack"] == "song.mp3"
+    media = {m["name"]: m for m in client.get("/api/media").get_json()["media"]}
+    assert media["song.mp3"]["soundtrack"] is True and media["song.mp3"]["kind"] == "audio"
+    assert client.get("/api/status").get_json()["soundtrack"] == "song.mp3"
+
+    # Back to the artwork's own sound.
+    audio_ipc.calls.clear()
+    ipc.calls.clear()
+    assert client.post("/api/soundtrack", json={"filename": None}).status_code == 200
+    assert audio_ipc.calls[0] == ("command", "stop")
+    assert ipc.calls[-1] == ("set", "aid", "auto")
+    assert ctl.state.load()["soundtrack"] is None
+
+
+def test_soundtrack_follows_artwork_changes(client, ipc, audio_ipc):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("song.mp3", MP3)]:
+        post_file(client, name, data)
+    client.post("/api/soundtrack", json={"filename": "song.mp3"})
+    # Nothing on screen yet: the soundtrack waits for a visual.
+    assert not any(c[0] == "load" for c in audio_ipc.calls)
+    client.post("/api/play", json={"filename": "b.png"})
+    assert ("load", "song.mp3") in audio_ipc.calls
+    n = len(audio_ipc.calls)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    # Switching the visual doesn't restart the soundtrack.
+    assert ("load", "song.mp3") not in audio_ipc.calls[n:]
+    assert ipc.calls[-1] == ("set", "aid", "no")
+    client.post("/api/stop")
+    assert ("command", "stop") in audio_ipc.calls[n:]
+
+
+def test_soundtrack_rejects_non_audio_and_missing(client):
+    post_file(client, "a.mp4", MP4)
+    assert client.post("/api/soundtrack", json={"filename": "a.mp4"}).status_code == 400
+    assert client.post("/api/soundtrack", json={"filename": "x.mp3"}).status_code == 404
+    assert client.post("/api/soundtrack", json={"filename": 3}).status_code == 400
+
+
+def test_invalid_soundtrack_restores_previous(client, audio_ipc, ctl):
+    for name, data in [("a.mp4", MP4), ("good.mp3", MP3), ("bad.mp3", MP3)]:
+        post_file(client, name, data)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    client.post("/api/soundtrack", json={"filename": "good.mp3"})
+    audio_ipc.invalid.add("bad.mp3")
+    res = client.post("/api/soundtrack", json={"filename": "bad.mp3"})
+    assert res.status_code == 422
+    assert ctl.state.load()["soundtrack"] == "good.mp3"
+    assert audio_ipc.calls[-2] == ("load", "good.mp3")
+
+
+def test_upload_audio_with_play_sets_soundtrack(client, ctl):
+    post_file(client, "a.mp4", MP4)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    res = post_file(client, "song.mp3", MP3, play="1")
+    assert res.status_code == 201
+    state = ctl.state.load()
+    assert (state["current"], state["soundtrack"]) == ("a.mp4", "song.mp3")
+
+
+def test_volume_mute_pause_reach_both_players(client, ipc, audio_ipc):
+    client.post("/api/volume", json={"volume": 30})
+    client.post("/api/mute", json={"muted": True})
+    client.post("/api/pause")
+    for fake in (ipc, audio_ipc):
+        assert ("set", "volume", 30) in fake.calls
+        assert ("set", "mute", True) in fake.calls
+        assert ("set", "pause", True) in fake.calls
+
+
+def test_audio_player_down_does_not_break_artwork(client, ipc, audio_ipc, ctl):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "song.mp3", MP3)
+    client.post("/api/soundtrack", json={"filename": "song.mp3"})
+    audio_ipc.available = False
+    assert client.post("/api/play", json={"filename": "a.mp4"}).status_code == 200
+    assert ctl.state.load()["current"] == "a.mp4"
+    assert client.post("/api/volume", json={"volume": 20}).status_code == 200
+
+
+def test_delete_soundtrack_needs_force(client, ipc, ctl, cfg):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "song.mp3", MP3)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    client.post("/api/soundtrack", json={"filename": "song.mp3"})
+    assert client.delete("/api/media/song.mp3").status_code == 409
+    assert client.delete("/api/media/song.mp3?force=1").status_code == 200
+    assert ctl.state.load()["soundtrack"] is None
+    assert ipc.calls[-1] == ("set", "aid", "auto")
+    assert ctl.state.load()["current"] == "a.mp4"
+
+
+def test_scaling_setting(client, ipc, ctl):
+    assert client.post("/api/settings", json={"scaling": "sharp"}).status_code == 200
+    assert ("set", "scale", "nearest") in ipc.calls
+    assert ctl.state.load()["scaling"] == "sharp"
+    assert client.post("/api/settings", json={"scaling": "blurry"}).status_code == 400
+
+
+@pytest.mark.skipif(not shutil.which("rsvg-convert"), reason="needs rsvg-convert")
+def test_svg_upload_becomes_png(client, cfg):
+    res = post_file(client, "logo.svg", SVG)
+    assert res.status_code == 201
+    assert res.get_json()["saved"] == ["logo.png"]
+    assert (cfg.media_dir / "logo.png").read_bytes()[:8] == PNG[:8]
+    assert list(cfg.incoming_dir.iterdir()) == []

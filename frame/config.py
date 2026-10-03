@@ -44,6 +44,11 @@ class Config:
         return self.run_dir / "mpv.sock"
 
     @property
+    def audio_socket(self) -> Path:
+        # The second, audio-only mpv that plays a separate soundtrack.
+        return self.run_dir / "audio.sock"
+
+    @property
     def player_status_file(self) -> Path:
         return self.run_dir / "player.json"
 

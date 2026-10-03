@@ -1,5 +1,8 @@
 """frame-player.service: keep exactly one fullscreen mpv running, forever.
 
+A second, audio-only mpv runs next to it for separate soundtracks. The two are
+supervised as a pair: if either fails, both are restarted.
+
 Responsibilities:
   * start mpv with the saved artwork/volume/rotation (read from state.json)
   * restart mpv if it exits, with exponential backoff (no tight crash loops)
@@ -24,7 +27,7 @@ import time
 from . import display
 from .config import Config, setup_logging
 from .media import MediaLibrary
-from .player import MpvIpc, PlayerUnavailable, build_mpv_args
+from .player import MpvIpc, PlayerUnavailable, build_audio_args, build_mpv_args, mpv_version
 from .state import StateStore
 
 log = logging.getLogger("frame.player")
@@ -53,6 +56,8 @@ class Supervisor:
         self.state = StateStore(cfg.state_file)
         self.library = MediaLibrary(cfg.media_dir, cfg.incoming_dir)
         self.proc: subprocess.Popen | None = None
+        self.audio_proc: subprocess.Popen | None = None
+        self.mpv_version: tuple[int, int] | None = None
         self.started_at = 0.0
         self.backoff = MIN_BACKOFF
         self.restarts = 0
@@ -62,6 +67,7 @@ class Supervisor:
         self.stopping = False
         self._waiting_logged = False
         self.ipc = MpvIpc(cfg.mpv_socket, timeout=3.0)
+        self.audio_ipc = MpvIpc(cfg.audio_socket, timeout=3.0)
 
     def check_health(self) -> str | None:
         """None if mpv is healthy, otherwise a description of the problem."""
@@ -72,6 +78,8 @@ class Supervisor:
                 return "video output not running (display could not be opened)"
         except PlayerUnavailable as exc:
             return f"not answering on IPC ({exc})"
+        if self.audio_proc is not None and not self.audio_ipc.ping():
+            return "audio player not answering on IPC"
         return None
 
     # --- display ------------------------------------------------------------
@@ -97,11 +105,15 @@ class Supervisor:
             else:
                 log.warning("saved artwork %r is missing; showing black screen", current)
 
+        soundtrack = self.library.soundtrack(state)
+
         audio = state.get("audio_device") or "auto"
         if audio == "auto":
             audio = display.hdmi_audio_device(connector, self.cfg.proc_asound)
         self.audio_device = audio
         self.connector = connector
+        if self.mpv_version is None:
+            self.mpv_version = mpv_version(self.cfg.mpv_bin)
 
         args = build_mpv_args(
             self.cfg.mpv_bin,
@@ -111,46 +123,52 @@ class Supervisor:
             drm_device=connector.device if connector else None,
             drm_connector=connector.name if connector else None,
             audio_device=audio,
+            mpv_version=self.mpv_version,
+            own_audio=soundtrack is None,
         )
-        try:
-            self.cfg.mpv_socket.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            log.warning("could not remove stale socket: %s", exc)
+        audio_args = build_audio_args(
+            self.cfg.mpv_bin, self.cfg.audio_socket, state, soundtrack, audio_device=audio
+        )
+        for sock in (self.cfg.mpv_socket, self.cfg.audio_socket):
+            try:
+                sock.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning("could not remove stale socket: %s", exc)
         log.info(
-            "starting mpv: display=%s audio=%s artwork=%s",
+            "starting mpv: display=%s audio=%s artwork=%s soundtrack=%s",
             f"{connector.card}/{connector.name}" if connector else "default",
             audio or "default",
             current if media_path else "(none)",
+            soundtrack.name if soundtrack else "(artwork's own)",
         )
         log.debug("mpv command: %s", " ".join(args))
         self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL)
         self.started_at = time.monotonic()
+        try:
+            self.audio_proc = subprocess.Popen(audio_args, stdin=subprocess.DEVNULL)
+        except OSError:
+            self.stop_mpv("audio player could not start")
+            raise
         self.write_status()
 
     def stop_mpv(self, reason: str) -> None:
-        if not self.proc or self.proc.poll() is not None:
-            return
-        log.info("stopping mpv (%s)", reason)
-        # Ask nicely via IPC first so mpv releases DRM and audio cleanly.
-        try:
-            MpvIpc(self.cfg.mpv_socket, timeout=1.0).command("quit")
-        except Exception:
-            self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            log.warning("mpv did not exit; killing it")
-            self.proc.kill()
-            self.proc.wait()
+        if self.proc and self.proc.poll() is None:
+            log.info("stopping mpv (%s)", reason)
+        for proc, sock in ((self.proc, self.cfg.mpv_socket),
+                           (self.audio_proc, self.cfg.audio_socket)):
+            if proc is not None:
+                _stop_process(proc, sock)
 
     def write_status(self) -> None:
         running = bool(self.proc and self.proc.poll() is None)
+        audio_running = bool(self.audio_proc and self.audio_proc.poll() is None)
         status = {
             "supervisor_pid": os.getpid(),
             "mpv_pid": self.proc.pid if running else None,
             "mpv_running": running,
+            "audio_mpv_running": audio_running,
             "mpv_started_at": time.time() - (time.monotonic() - self.started_at)
             if running
             else None,
@@ -227,7 +245,14 @@ class Supervisor:
             code = self.proc.poll()
             if code is not None:
                 self.last_exit = code
+                self.stop_mpv("main player exited")
                 return f"exited with code {code}"
+            if self.audio_proc is not None:
+                code = self.audio_proc.poll()
+                if code is not None:
+                    self.last_exit = code
+                    self.stop_mpv("audio player exited")
+                    return f"audio player exited with code {code}"
             self._sleep(POLL_SECONDS)
 
             has_sysfs, _, now_connected = self._display_snapshot()
@@ -265,6 +290,22 @@ class Supervisor:
     def _on_signal(self, signum, _frame) -> None:
         log.info("received signal %d", signum)
         self.stopping = True
+
+
+def _stop_process(proc: subprocess.Popen, sock) -> None:
+    if proc.poll() is not None:
+        return
+    # Ask nicely via IPC first so mpv releases DRM and audio cleanly.
+    try:
+        MpvIpc(sock, timeout=1.0).command("quit")
+    except Exception:
+        proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        log.warning("mpv did not exit; killing it")
+        proc.kill()
+        proc.wait()
 
 
 def main() -> int:

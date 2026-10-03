@@ -33,6 +33,14 @@
       </button>
       <button data-action="stop" class="secondary">Black screen</button>
     </div>
+    {% set audios = media|selectattr('kind', 'equalto', 'audio')|list %}
+    <label class="sound">Sound
+      <select id="soundtrack">
+        <option value="">Artwork's own sound</option>
+        {% for a in audios %}<option value="{{ a.name }}" {{ 'selected' if a.soundtrack else '' }}>{{ a.name }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if not audios %}<p class="hint">Upload an audio file (MP3, M4A, WAV, FLAC…) to play it with any artwork. It loops on its own.</p>{% endif %}
     <label class="volume">
       <span>Volume <output id="volume-out">{{ status.volume }}</output></span>
       <input type="range" id="volume" min="0" max="100" step="1" value="{{ status.volume }}">
@@ -46,7 +54,10 @@
       <label class="check"><input type="checkbox" name="play" value="1"> Play after upload</label>
       <button type="submit">Upload</button>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p class="hint">MP4 (H.264 + AAC) recommended. Max {{ max_upload_mb }} MB.</p>
+      <p class="hint">
+        Video (MP4 recommended), GIF, images (JPG, PNG, WebP, SVG…) or audio
+        (MP3, M4A, WAV, FLAC…). Audio files become the sound. Max {{ max_upload_mb }} MB.
+      </p>
     </form>
   </section>
 
@@ -55,20 +66,25 @@
     {% if media %}
     <ul class="media">
       {% for m in media %}
-      <li class="{{ 'playing' if m.current else '' }}" data-name="{{ m.name }}">
+      {% set in_use = m.current or m.soundtrack %}
+      <li class="{{ 'playing' if in_use else '' }}" data-name="{{ m.name }}">
         <div class="info">
           <span class="name">{{ m.name }}</span>
-          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.current %} · <strong>selected</strong>{% endif %}</span>
+          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.current %} · <strong>selected</strong>{% elif m.soundtrack %} · <strong>sound</strong>{% endif %}</span>
         </div>
         <div class="actions">
+          {% if m.kind == 'audio' %}
+          <button data-sound="{{ m.name }}" {{ 'disabled' if m.soundtrack else '' }}>Play</button>
+          {% else %}
           <button data-play="{{ m.name }}" {{ 'disabled' if m.current else '' }}>Play</button>
-          <button class="danger" data-delete="{{ m.name }}" data-current="{{ '1' if m.current else '' }}">Delete</button>
+          {% endif %}
+          <button class="danger" data-delete="{{ m.name }}" data-in-use="{{ 'current' if m.current else ('sound' if m.soundtrack else '') }}">Delete</button>
         </div>
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <p class="muted-text">No artwork yet. Upload a video above.</p>
+    <p class="muted-text">No artwork yet. Upload a video, GIF or image above.</p>
     {% endif %}
   </section>
 
@@ -82,6 +98,11 @@
     <label>Fit
       <select data-setting="fit">
         {% for f in fit_modes %}<option value="{{ f }}" {{ 'selected' if f == status.fit else '' }}>{{ {'fit': 'Fit (black bars)', 'fill': 'Fill (crop)', 'stretch': 'Stretch'}[f] }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Scaling
+      <select data-setting="scaling">
+        {% for m in scaling_modes %}<option value="{{ m }}" {{ 'selected' if m == status.scaling else '' }}>{{ {'smooth': 'Smooth', 'sharp': 'Sharp (pixel art)'}[m] }}</option>{% endfor %}
       </select>
     </label>
     <details>

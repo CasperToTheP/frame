@@ -107,15 +107,30 @@ document.querySelectorAll("[data-play]").forEach((btn) => {
   });
 });
 
+function setSound(name) {
+  return act("POST", "/api/soundtrack", { filename: name || null }, { reload: true });
+}
+
+document.querySelectorAll("[data-sound]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    setSound(btn.dataset.sound).finally(() => { btn.disabled = false; });
+  });
+});
+
+$("#soundtrack").addEventListener("change", (e) => setSound(e.target.value));
+
 document.querySelectorAll("[data-delete]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const name = btn.dataset.delete;
-    const playing = btn.dataset.current === "1";
-    const q = playing
+    const inUse = btn.dataset.inUse;
+    const q = inUse === "current"
       ? `"${name}" is playing. Stop it and delete it? The screen will go black.`
-      : `Delete "${name}"? This cannot be undone.`;
+      : inUse === "sound"
+        ? `"${name}" is the selected sound. Delete it? The artwork's own sound will play instead.`
+        : `Delete "${name}"? This cannot be undone.`;
     if (!confirm(q)) return;
-    const url = `/api/media/${encodeURIComponent(name)}` + (playing ? "?force=1" : "");
+    const url = `/api/media/${encodeURIComponent(name)}` + (inUse ? "?force=1" : "");
     act("DELETE", url, undefined, { reload: true, ok: "Deleted" });
   });
 });

@@ -3,7 +3,9 @@
 Software for a wall-mounted digital art frame built from a Raspberry Pi and an HDMI monitor.
 
 You plug it in and the artwork you chose last time starts fullscreen and loops forever,
-with sound through the monitor's speakers. Nothing else is ever on screen: no desktop,
+with sound through the monitor's speakers. Artwork can be a video, a GIF or an image
+(NFTs included), and the sound can come from the artwork itself or from a separate audio
+file. Nothing else is ever on screen: no desktop,
 no console, no cursor, no player controls. To change the artwork, open
 `http://frame.local:8080` on a phone or laptop on the same Wi-Fi. From there you can upload
 videos, pick what plays, and set volume, mute and screen rotation.
@@ -23,7 +25,9 @@ crashes, keeps playing when Wi-Fi drops, and needs no internet once the artwork 
 - [Prepare the Raspberry Pi](#prepare-the-raspberry-pi)
 - [Install Frame](#install-frame)
 - [Using it](#using-it)
+- [Supported files](#supported-files)
 - [Preparing artwork](#preparing-artwork)
+- [NFTs](#nfts)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Future ideas](#future-ideas)
@@ -38,7 +42,8 @@ crashes, keeps playing when Wi-Fi drops, and needs no internet once the artwork 
                           /run/frame/mpv.sock
                                    ▲
  frame-player (supervisor) ──runs──┘ mpv ──DRM/KMS──▶ HDMI display + HDMI audio
-       reads state.json at start, restarts mpv on crash / hang / HDMI replug
+       │                     └─runs── mpv (audio only) ──▶ HDMI audio, for a separate soundtrack
+       reads state.json at start, restarts both on crash / hang / HDMI replug
 ```
 
 - **frame-player.service** keeps one fullscreen `mpv` running. mpv draws directly to the
@@ -49,6 +54,9 @@ crashes, keeps playing when Wi-Fi drops, and needs no internet once the artwork 
 - **frame-web.service** serves the UI and the JSON API. It changes playback live through
   mpv's IPC socket, so mpv is never restarted just to switch artwork. Every change is saved
   to `state.json` first, so it survives reboots and player restarts.
+- A **second, audio-only mpv** plays a separate soundtrack when you choose one. It loops on
+  its own, independently of the artwork. Only one player uses the HDMI audio at a time:
+  with a soundtrack chosen, the artwork's own sound is switched off.
 - Playback doesn't depend on the web service. If the web service crashes or Wi-Fi drops,
   the artwork keeps playing.
 
@@ -138,14 +146,24 @@ Optional settings go in `/etc/default/frame`: port, upload size limit and log le
 
 ### Upload artwork
 In **Upload artwork**, choose a file and tap **Upload**. A progress bar shows while it
-uploads. Uploading doesn't change what's playing unless you tick **Play after upload**.
-Supported formats: `.mp4` (recommended), `.mkv`, `.webm`, `.mov`, `.m4v`, `.gif`, `.jpg`, `.png`.
+uploads. Uploading doesn't change what's playing unless you tick **Play after upload**
+(for an audio file, that makes it the sound). See [Supported files](#supported-files).
 The default size limit is 4 GB, and an upload is refused if it would leave less than
 256 MB free on the SD card.
 
 ### Select artwork
 Tap **Play** next to a file in the **Library**. The selection is saved and still applies
 after a reboot or power cut.
+
+### Sound
+Under **Now playing**, **Sound** chooses what you hear:
+- **Artwork's own sound**: the audio inside the video file (the default). GIFs and images
+  are silent.
+- **An audio file** you uploaded: it plays instead, with any artwork, and loops on its own.
+  A 3-second GIF can play over a 4-minute track; switching artwork doesn't restart the
+  music. You can also tap **Play** next to an audio file in the Library.
+
+The sound only plays while artwork is on screen: **Black screen** silences it too.
 
 ### Volume, mute and pause
 Use the slider and buttons under **Now playing**. Volume and mute are saved; pause isn't,
@@ -158,6 +176,8 @@ Under **Display**:
   The change applies instantly.
 - **Fit:** *Fit* shows the whole artwork with black bars (the default). *Fill* crops to
   fill the screen. *Stretch* distorts the image to fill the screen.
+- **Scaling:** *Smooth* suits photos and video. *Sharp (pixel art)* keeps every pixel a
+  crisp square when small artwork is enlarged, for pixel-art NFTs and retro GIFs.
 - **Advanced:** pick the audio output and the hardware decoding mode, and see which
   decoder is in use.
 
@@ -194,16 +214,31 @@ The UI uses a small JSON API that you can also script against:
 | `GET /api/status` | | current artwork, playback state, volume, mute, rotation, player health |
 | `GET /api/media` | | list of files (+ free disk space) |
 | `POST /api/media` | multipart `file` (+ optional `play=1`) | upload |
-| `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for the playing file) |
+| `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for the playing file or the selected sound) |
 | `POST /api/play` | `{"filename": "art.mp4"}` | select artwork |
+| `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play an audio file instead of the artwork's own sound / go back to it |
 | `POST /api/stop` | | black screen |
 | `POST /api/pause` / `POST /api/resume` | | pause / resume |
 | `POST /api/volume` | `{"volume": 60}` | volume 0–100 |
 | `POST /api/mute` | `{"muted": true}` or `{}` to toggle | mute |
-| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "audio_device": "auto", "hwdec": "auto-safe"}` | display/audio settings |
+| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "scaling": "sharp", "audio_device": "auto", "hwdec": "auto-safe"}` | display/audio settings |
 | `GET /api/audio-devices` | | audio outputs mpv can see |
 
 Example: `curl -X POST -H 'Content-Type: application/json' -d '{"volume":40}' http://frame.local:8080/api/volume`
+
+## Supported files
+
+| Kind | Formats | Notes |
+|---|---|---|
+| Video | `.mp4` (recommended), `.m4v`, `.mov`, `.mkv`, `.webm` | Loops forever. H.264 is decoded in hardware; see below. |
+| Animation | `.gif` | Loops forever, including transparent GIFs. |
+| Image | `.jpg`, `.png`, `.webp`, `.bmp`, `.tif`/`.tiff` | Stays on screen. Transparency is shown on black. |
+| Vector image | `.svg` | Converted to a sharp PNG (1920 px on the longest side) when uploaded. |
+| Sound | `.mp3`, `.m4a`, `.aac`, `.wav`, `.flac`, `.ogg`, `.opus` | Chosen under **Sound**; loops on its own. |
+
+Not supported: **animated WebP** (the Pi's video library can't decode it; convert it, see
+[NFTs](#nfts)), HEIC/AVIF photos, and HTML or 3D (`.glb`) artwork, which needs a web
+browser or a 3D engine the 1 GB Pi doesn't run.
 
 ## Preparing artwork
 
@@ -273,6 +308,45 @@ invisible, but the content itself has to loop:
 6. **Longer loops have fewer seams.** A 2-minute loop shows a seam 30 times an hour; a
    2-second loop shows it 1,800 times.
 
+## NFTs
+
+Frame plays the artwork **file** of an NFT. It doesn't connect to a wallet or the
+internet: download the files once, upload them, and the frame works offline.
+
+**Getting the original file.** Marketplace previews are often small or re-compressed. For
+the best quality, open the NFT on its marketplace or block explorer, find the original
+media link (often `ipfs://…` or an `arweave.net` link), and download that file. An
+`ipfs://<CID>/<file>` link can be opened in a browser as
+`https://ipfs.io/ipfs/<CID>/<file>`.
+
+**What works as-is:** MP4/MOV/WebM videos, GIFs, PNG/JPG/still WebP images, and on-chain
+SVG art (converted on upload). Transparent backgrounds show as black.
+
+**Pixel art** (punks, 8-bit art and so on): set **Display → Scaling** to
+**Sharp (pixel art)**, otherwise enlarging a 24×24 image blurs it.
+
+**Animated WebP:** convert it to MP4 on your computer. ffmpeg can't read animated WebP
+before version 8, so use the `webp` tools to unpack it first:
+
+```bash
+# Debian/Ubuntu: sudo apt install webp   ·   macOS: brew install webp
+mkdir frames
+anim_dump -folder frames -prefix f_ art.webp            # one PNG per frame
+ffmpeg -framerate 12 -i frames/f_%04d.png \
+  -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=neighbor" \
+  -c:v libx264 -pix_fmt yuv420p -crf 18 art.mp4
+```
+
+Set `-framerate` to the animation's speed. Alternatively, convert it to a GIF with any
+online "WebP to GIF" converter.
+
+**Music NFTs, or art with a separate audio file:** upload the visual and the audio file
+separately, then choose the audio under **Sound**.
+
+**HTML / generative (JavaScript) and 3D NFTs** can't run on the frame. Record them as a
+video on your computer (most marketplaces and many projects offer an MP4 render), then
+upload that.
+
 ## Troubleshooting
 
 First, run the diagnostic script. It's read-only, so it's safe to run any time:
@@ -319,7 +393,10 @@ journalctl -u frame-web --since "10 min ago"
 - Test outside Frame: `sudo systemctl stop frame-player`, then
   `speaker-test -D hdmi:CARD=vc4hdmi0,DEV=0 -c 2 -t sine -l 1`, then
   `sudo systemctl start frame-player`.
-- If the file has no audio track (e.g. a GIF), there's nothing to play.
+- If the file has no audio track (e.g. a GIF), there's nothing to play. Choose an audio
+  file under **Sound** instead.
+- If a separate **Sound** is chosen, the artwork's own sound is off on purpose. `frame-doctor`
+  shows both players (artwork and soundtrack) and which one has the audio output open.
 
 ### Player doesn't start
 ```bash
@@ -378,8 +455,8 @@ frame/
   state.py           state.json load/validate/atomic save
   media.py           media library, filename sanitising, upload storage
   display.py         HDMI connector + HDMI audio detection (sysfs)
-  player.py          mpv command line + JSON IPC client
-  player_service.py  frame-player: mpv supervisor
+  player.py          mpv command lines (artwork + soundtrack) + JSON IPC client
+  player_service.py  frame-player: supervises both mpv processes
   controller.py      actions behind the API (play, volume, delete, ...)
   web.py             frame-web: Flask app + waitress entry point
   templates/, static/  the UI (server-rendered HTML, CSS, vanilla JS)
@@ -400,6 +477,7 @@ These are deliberately not in version 1:
 - Optional password for the web UI. `check_access()` in `frame/web.py` is the single place
   to add it.
 - Playlists or rotating artwork, thumbnails, Home Assistant integration.
+- Importing NFTs straight from a wallet address.
 
 ## Licence
 

@@ -11,8 +11,11 @@ from frame.player import (
     MpvIpc,
     PlayerError,
     PlayerUnavailable,
+    alpha_args,
+    build_audio_args,
     build_mpv_args,
     fit_properties,
+    mpv_version,
 )
 from frame.state import DEFAULTS
 
@@ -179,6 +182,49 @@ def test_mpv_args_without_media_or_display():
     assert "--" not in args
     assert not any(a.startswith(("--drm-device", "--drm-connector", "--audio-device"))
                    for a in args)
+
+
+def test_mpv_args_soundtrack_scaling_and_alpha():
+    state = dict(DEFAULTS, scaling="sharp")
+    args = build_mpv_args("mpv", Path("s"), state, None, mpv_version=(0, 40), own_audio=False)
+    assert "--aid=no" in args and "--scale=nearest" in args
+    assert "--background=color" in args
+    default = build_mpv_args("mpv", Path("s"), dict(DEFAULTS), None)
+    assert "--aid=no" not in default and "--scale=bilinear" in default
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [((0, 35), ["--alpha=blend"]), ((0, 37), ["--alpha=blend"]),
+     ((0, 38), ["--background=color"]), ((0, 40), ["--background=color"]),
+     ((1, 0), ["--background=color"]), (None, [])],
+)
+def test_alpha_args_follow_mpv_version(version, expected):
+    assert alpha_args(version) == expected
+
+
+def test_mpv_version_parsing(tmp_path):
+    fake = tmp_path / "mpv"
+    fake.write_text("#!/bin/sh\necho 'mpv v0.40.0-dirty Copyright (c) mpv projects'\n")
+    fake.chmod(0o755)
+    assert mpv_version(str(fake)) == (0, 40)
+    old = tmp_path / "mpv-old"
+    old.write_text("#!/bin/sh\necho 'mpv 0.35.1 Copyright'\n")
+    old.chmod(0o755)
+    assert mpv_version(str(old)) == (0, 35)
+    assert mpv_version(str(tmp_path / "missing")) is None
+
+
+def test_audio_args():
+    state = dict(DEFAULTS, volume=25, muted=True)
+    args = build_audio_args("mpv", Path("a.sock"), state, Path("/m/song.mp3"),
+                            audio_device="alsa/hdmi:CARD=vc4hdmi0,DEV=0")
+    for flag in ["--no-video", "--idle=yes", "--loop-file=inf", "--cover-art-auto=no",
+                 "--volume=25", "--mute=yes", "--input-ipc-server=a.sock",
+                 "--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0"]:
+        assert flag in args, flag
+    assert args[-2:] == ["--", str(Path("/m/song.mp3"))]
+    assert "--" not in build_audio_args("mpv", Path("a.sock"), state, None)
 
 
 @pytest.mark.parametrize(

@@ -28,7 +28,7 @@ Two systemd services, both running as the unprivileged system user `frame`:
 
 | Service | Module | Role |
 |---|---|---|
-| `frame-player.service` | `frame/player_service.py` | Supervisor. Starts one mpv with the saved state, restarts it with backoff if it exits, hangs (IPC health check) or has no video output (`vo-configured` false), waits for an HDMI display, and restarts mpv on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
+| `frame-player.service` | `frame/player_service.py` | Supervisor. Starts the artwork mpv and an audio-only "soundtrack" mpv with the saved state, and treats them as a pair: if either exits, hangs (IPC health check) or the artwork mpv has no video output (`vo-configured` false), both restart with backoff. Waits for an HDMI display and restarts both on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
 | `frame-web.service` | `frame/web.py` (+ `controller.py`) | Flask app served by waitress on :8080. Server-rendered HTML + vanilla JS. Changes playback live over mpv JSON IPC. |
 
 Key rules:
@@ -45,6 +45,19 @@ Key rules:
   between kernels. Audio is ALSA, `alsa/hdmi:CARD=vc4hdmiN,DEV=0` for the connected port.
   The vc4 HDMI driver needs the IEC958 `hdmi:` PCM, not `hw:`.
 - `--audio-fallback-to-null=yes`: if HDMI audio fails, video keeps playing.
+- **Separate soundtracks** play in the second, audio-only mpv (`/run/frame/audio.sock`,
+  `build_audio_args`), so a short GIF can loop over a long track. The vc4 HDMI PCM can
+  only be opened once, so only one mpv may have audio: with a soundtrack the artwork mpv
+  runs with `aid=no` (mpv then closes its audio output), and the audio mpv idles with no
+  file (device closed) otherwise. `Controller._sync_sound` switches in an order that
+  releases the device before the other player takes it. A soundtrack only plays while
+  a visual is selected (`MediaLibrary.soundtrack`).
+- Transparent images are blended on black, not mpv's default checkerboard. The option
+  was renamed in mpv 0.38 (`--alpha=blend` before, `--background=color` after), so the
+  supervisor reads `mpv --version` and `alpha_args()` picks the right one.
+- SVG uploads are rendered to PNG with `rsvg-convert` (package `librsvg2-bin`), because
+  Bookworm's mpv can't open SVG. Animated WebP is refused at upload: no ffmpeg before 8.0
+  decodes it.
 - Rotation (`video-rotate`) and fit (`keepaspect`/`panscan`) are mpv properties, so they
   change live. Display rotation is not done at the KMS level.
 - Hardware-specific code is isolated in `display.py` (sysfs/procfs) and `player.py`
@@ -66,7 +79,8 @@ Key rules:
 | `/var/lib/frame/media/` | artwork (never touched by install/upgrade) |
 | `/var/lib/frame/state.json` | persistent settings (see `state.DEFAULTS`) |
 | `/var/lib/frame/tmp/` | waitress upload spool |
-| `/run/frame/mpv.sock` | mpv IPC socket (created via `/etc/tmpfiles.d/frame.conf`) |
+| `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
+| `/run/frame/audio.sock` | soundtrack mpv IPC socket |
 | `/run/frame/player.json` | supervisor health info, read by the UI |
 | `/etc/default/frame` | optional env overrides (`FRAME_*`, see `config.py`) |
 | `/etc/systemd/system/frame-*.service` | units (source in `systemd/`) |
@@ -104,7 +118,9 @@ docker run --rm -v "$PWD:/src:ro" debian:bookworm-slim bash -c '
   /v/bin/pytest -q && shellcheck --severity=warning scripts/*.sh'
 ```
 
-(Repeat with `debian:trixie-slim`.) CI (`.github/workflows/ci.yml`) runs lint, tests and
+(Repeat with `debian:trixie-slim`. Add `librsvg2-bin` to run the SVG tests too. If
+Debian's mirrors aren't reachable, `ubuntu:jammy` (mpv 0.34) and `ubuntu:questing`
+(mpv 0.40) bracket the Pi OS versions.) CI (`.github/workflows/ci.yml`) runs lint, tests and
 shellcheck on Python 3.11 and 3.13.
 
 ## Deployment

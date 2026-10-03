@@ -10,7 +10,9 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import re
 import socket
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -43,6 +45,37 @@ def fit_properties(fit: str) -> dict[str, Any]:
     return {"keepaspect": True, "panscan": 0.0}  # "fit": letterbox / pillarbox
 
 
+def scale_filter(scaling: str) -> str:
+    """mpv upscaler. Bilinear is cheap on the Pi; nearest keeps pixel art blocky."""
+    return "nearest" if scaling == "sharp" else "bilinear"
+
+
+def mpv_version(mpv_bin: str) -> tuple[int, int] | None:
+    """(major, minor) of the installed mpv, or None if it can't be determined."""
+    try:
+        out = subprocess.run(
+            [mpv_bin, "--no-config", "--version"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"mpv v?(\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def alpha_args(version: tuple[int, int] | None) -> list[str]:
+    """Show transparent images on black instead of mpv's default checkerboard.
+
+    The option was renamed in mpv 0.38, and mpv exits on options it doesn't
+    know, so the right one is picked by version (and none if it is unknown).
+    """
+    if version is None:
+        return []
+    if version >= (0, 38):
+        return ["--background=color"]  # blended against --background-color (black)
+    return ["--alpha=blend"]  # blended against --background (black)
+
+
 def _opt(value: Any) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
@@ -57,11 +90,15 @@ def build_mpv_args(
     drm_device: str | None = None,
     drm_connector: str | None = None,
     audio_device: str | None = None,
+    mpv_version: tuple[int, int] | None = None,
+    own_audio: bool = True,
 ) -> list[str]:
     """The full mpv command line for the player service.
 
     mpv stays running with ``--idle`` even with nothing to play, so the screen is
     black (not a console) and the web UI can always ``loadfile`` new artwork.
+    ``own_audio=False`` mutes the artwork's own sound track (``--aid=no``)
+    because a separate soundtrack plays in the audio-only mpv instead.
     """
     args = [
         mpv_bin,
@@ -101,6 +138,8 @@ def build_mpv_args(
         f"--volume={int(state.get('volume', 70))}",
         f"--mute={_opt(bool(state.get('muted')))}",
         f"--video-rotate={int(state.get('rotation', 0))}",
+        f"--scale={scale_filter(state.get('scaling', 'smooth'))}",
+        *alpha_args(mpv_version),
         # Warnings and errors go to the journal; --quiet drops the "AV: ..." status line.
         "--quiet",
         "--msg-level=all=warn",
@@ -114,8 +153,55 @@ def build_mpv_args(
         args.append(f"--drm-connector={drm_connector}")
     if audio_device:
         args.append(f"--audio-device={audio_device}")
+    if not own_audio:
+        args.append("--aid=no")
     if media_path is not None:
         args += ["--", str(media_path)]
+    return args
+
+
+def build_audio_args(
+    mpv_bin: str,
+    socket_path: Path,
+    state: dict[str, Any],
+    audio_path: Path | None,
+    audio_device: str | None = None,
+) -> list[str]:
+    """Command line for the audio-only mpv that loops a separate soundtrack.
+
+    It idles (with the audio device closed) while there is no soundtrack, so it
+    never competes with the main player for the HDMI audio device.
+    """
+    args = [
+        mpv_bin,
+        "--no-config",
+        "--no-video",
+        "--force-window=no",
+        "--idle=yes",
+        "--no-input-default-bindings",
+        "--input-terminal=no",
+        "--audio-display=no",
+        "--cover-art-auto=no",  # don't pick up images next to the audio file
+        "--ytdl=no",
+        "--load-stats-overlay=no",
+        "--load-auto-profiles=no",
+        "--loop-file=inf",
+        "--cache=yes",
+        "--demuxer-max-bytes=32MiB",
+        "--demuxer-max-back-bytes=32MiB",
+        "--ao=alsa",
+        "--audio-fallback-to-null=yes",
+        "--volume-max=100",
+        f"--volume={int(state.get('volume', 70))}",
+        f"--mute={_opt(bool(state.get('muted')))}",
+        "--quiet",
+        "--msg-level=all=warn",
+        f"--input-ipc-server={socket_path}",
+    ]
+    if audio_device:
+        args.append(f"--audio-device={audio_device}")
+    if audio_path is not None:
+        args += ["--", str(audio_path)]
     return args
 
 

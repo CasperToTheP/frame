@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from frame.player import InvalidMedia, MpvIpc, build_mpv_args
+from frame.media import rasterize_svg
+from frame.player import InvalidMedia, MpvIpc, build_audio_args, build_mpv_args, mpv_version
 from frame.state import DEFAULTS
 
 pytestmark = pytest.mark.skipif(
@@ -33,19 +34,19 @@ def make_clip(path: Path, seconds: float = 2) -> None:
     )
 
 
-@pytest.fixture
-def mpv(tmp_path):
-    a = tmp_path / "a.mp4"
-    b = tmp_path / "b.mp4"
-    make_clip(a)
-    make_clip(b)
-    sock = tmp_path / "mpv.sock"
-    state = dict(DEFAULTS, volume=40, rotation=90)
-    args = build_mpv_args("mpv", sock, state, a)
-    # Same flags as on the Pi, except headless outputs.
+def ffmpeg(*args: str) -> None:
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True)
+
+
+def headless(args: list[str]) -> list[str]:
+    """Same flags as on the Pi, except null video/audio outputs."""
     args = [x for x in args if not x.startswith(("--vo=", "--gpu-context=", "--ao="))]
     args[1:1] = ["--vo=null", "--ao=null"]
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return args
+
+
+def start(args: list[str], sock: Path):
+    proc = subprocess.Popen(headless(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     ipc = MpvIpc(sock)
     for _ in range(100):
         if proc.poll() is not None:
@@ -53,6 +54,29 @@ def mpv(tmp_path):
         if sock.exists() and ipc.ping():
             break
         time.sleep(0.05)
+    return proc, ipc
+
+
+@pytest.fixture
+def mpv(tmp_path):
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    make_clip(a)
+    make_clip(b)
+    sock = tmp_path / "mpv.sock"
+    state = dict(DEFAULTS, volume=40, rotation=90, scaling="sharp")
+    # The real version, so the version-specific transparency flag is checked too.
+    args = build_mpv_args("mpv", sock, state, a, mpv_version=mpv_version("mpv"))
+    proc, ipc = start(args, sock)
+    yield ipc, tmp_path
+    proc.terminate()
+    proc.wait(5)
+
+
+@pytest.fixture
+def audio_mpv(tmp_path):
+    sock = tmp_path / "audio.sock"
+    proc, ipc = start(build_audio_args("mpv", sock, dict(DEFAULTS, volume=30), None), sock)
     yield ipc, tmp_path
     proc.terminate()
     proc.wait(5)
@@ -114,5 +138,70 @@ def test_corrupt_file_reported_and_player_survives(mpv):
 
 def test_stop_goes_idle(mpv):
     ipc, _ = mpv
+    ipc.command("stop")
+    assert wait_for(lambda: ipc.get("idle-active")) is True
+
+
+def test_version_specific_flags_accepted(mpv):
+    ipc, _ = mpv
+    assert mpv_version("mpv") is not None
+    assert ipc.get("scale") == "nearest"
+    ipc.set("scale", "bilinear")
+
+
+@pytest.mark.parametrize("name", ["a.webp", "a.bmp", "a.tiff", "a.gif", "alpha.png"])
+def test_image_formats_play(mpv, name):
+    ipc, tmp = mpv
+    src = "testsrc2=size=64x48:rate=10:duration=1"
+    if name == "alpha.png":
+        ffmpeg("-f", "lavfi", "-i", src, "-vf", "format=rgba,colorchannelmixer=aa=0.5",
+               "-frames:v", "1", str(tmp / name))
+    elif name == "a.gif":
+        ffmpeg("-f", "lavfi", "-i", src, str(tmp / name))
+    else:
+        ffmpeg("-f", "lavfi", "-i", src, "-frames:v", "1", str(tmp / name))
+    ipc.load(tmp / name)
+    assert wait_for(lambda: ipc.get("width")) == 64
+
+
+@pytest.mark.skipif(not shutil.which("rsvg-convert"), reason="needs rsvg-convert")
+def test_rasterized_svg_plays(mpv):
+    ipc, tmp = mpv
+    svg = tmp / "a.svg"
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">'
+                   '<circle cx="10" cy="10" r="8" fill="red"/></svg>')
+    rasterize_svg(svg, tmp / "a.png")
+    ipc.load(tmp / "a.png")
+    # Rendered so the longest side is 1920 px, whatever the rsvg-convert version.
+    assert wait_for(lambda: ipc.get("width")) == 1920
+    assert ipc.get("height") == 960
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="40"/>')
+    rasterize_svg(svg, tmp / "b.png")
+    ipc.load(tmp / "b.png")
+    assert (wait_for(lambda: ipc.get("height")), ipc.get("width")) == (1920, 960)
+
+
+def test_artwork_sound_switches_off_and_on_live(mpv):
+    ipc, _ = mpv
+    assert wait_for(lambda: ipc.get("current-ao")) == "null"
+    ipc.set("aid", "no")
+    # No audio output open any more: the HDMI device is free for the soundtrack.
+    assert wait_for(lambda: ipc.get("current-ao") is None) is True
+    ipc.set("aid", "auto")
+    assert wait_for(lambda: ipc.get("current-ao")) == "null"
+
+
+@pytest.mark.parametrize("ext", ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"])
+def test_soundtrack_formats_play_and_loop(audio_mpv, ext):
+    ipc, tmp = audio_mpv
+    path = tmp / f"song.{ext}"
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(path))
+    assert ipc.get("idle-active") is True
+    assert ipc.get("current-ao") is None  # idle: audio device closed
+    ipc.load(path)
+    assert ipc.get("volume") == 30
+    time.sleep(1.6)  # past the end of the 1 s file
+    assert ipc.get("path") == str(path)
+    assert ipc.get("idle-active") is False
     ipc.command("stop")
     assert wait_for(lambda: ipc.get("idle-active")) is True

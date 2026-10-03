@@ -148,6 +148,16 @@ installing; if one fails, note what `sudo frame-doctor` says.
 - [ ] The video loops forever without a visible pause at the seam
       (see [Making genuinely seamless loops](../README.md#making-genuinely-seamless-loops)).
 
+**Formats and sound**
+- [ ] A transparent PNG or GIF shows on **black**, not on a grey checkerboard.
+- [ ] A small pixel-art image looks crisp with **Display → Scaling → Sharp (pixel art)**.
+- [ ] An SVG uploads and shows sharply.
+- [ ] Upload an MP3 and choose it under **Sound** while a GIF plays: the music plays and
+      keeps looping on its own. Switching artwork doesn't restart it.
+- [ ] Switch **Sound** back to *Artwork's own sound* with a video playing: the video's
+      own sound comes back within a second or two.
+- [ ] Volume and mute work for both kinds of sound.
+
 **Performance**
 - [ ] **Display → Advanced → Decoder** shows a hardware decoder (not `no`) for an H.264 MP4.
 - [ ] A 1080p video plays smoothly. `frame-doctor` shows no under-voltage and a

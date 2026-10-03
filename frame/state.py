@@ -18,14 +18,19 @@ log = logging.getLogger(__name__)
 
 ROTATIONS = (0, 90, 180, 270)
 FIT_MODES = ("fit", "fill", "stretch")
+# "smooth" for photos and video; "sharp" keeps pixel art crisp when scaled up.
+SCALING_MODES = ("smooth", "sharp")
 
 DEFAULTS: dict[str, Any] = {
     # Filename (not path) inside the media directory, or None for a black screen.
     "current": None,
+    # Audio filename played (and looped) instead of the artwork's own sound, or None.
+    "soundtrack": None,
     "volume": 70,
     "muted": False,
     "rotation": 0,
     "fit": "fit",
+    "scaling": "smooth",
     # "auto" = pick the HDMI port the display is connected to. Otherwise an mpv
     # audio device name such as "alsa/hdmi:CARD=vc4hdmi0,DEV=0".
     "audio_device": "auto",
@@ -44,9 +49,9 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
     for key, value in changes.items():
         if key not in DEFAULTS:
             raise StateError(f"unknown setting: {key}")
-        if key == "current":
+        if key in ("current", "soundtrack"):
             if value is not None and (not isinstance(value, str) or not value):
-                raise StateError("current must be a filename or null")
+                raise StateError(f"{key} must be a filename or null")
         elif key == "volume":
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise StateError("volume must be a number 0-100")
@@ -61,6 +66,9 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
         elif key == "fit":
             if value not in FIT_MODES:
                 raise StateError(f"fit must be one of {', '.join(FIT_MODES)}")
+        elif key == "scaling":
+            if value not in SCALING_MODES:
+                raise StateError(f"scaling must be one of {', '.join(SCALING_MODES)}")
         elif key in ("audio_device", "hwdec"):
             if not isinstance(value, str) or not value or "\n" in value:
                 raise StateError(f"{key} must be a non-empty string")

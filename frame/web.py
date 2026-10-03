@@ -19,9 +19,9 @@ from werkzeug.exceptions import HTTPException
 from . import __version__
 from .config import Config, setup_logging
 from .controller import Controller
-from .media import EXTENSIONS, MediaError
+from .media import EXTENSIONS, MediaError, kind_of
 from .player import PlayerError, PlayerUnavailable
-from .state import FIT_MODES, ROTATIONS, StateError
+from .state import FIT_MODES, ROTATIONS, SCALING_MODES, StateError
 
 log = logging.getLogger("frame.web")
 
@@ -120,6 +120,7 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             media=ctl.media(),
             rotations=ROTATIONS,
             fit_modes=FIT_MODES,
+            scaling_modes=SCALING_MODES,
             accept=",".join(sorted(EXTENSIONS)),
             max_upload_mb=cfg.max_upload_mb,
             version=__version__,
@@ -159,7 +160,11 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             saved.append(name)
         result: dict[str, Any] = {"saved": saved}
         if request.form.get("play") in ("1", "true", "on") and saved:
-            result.update(ctl.play(saved[-1]))
+            last = saved[-1]
+            if kind_of(last) == "audio":
+                result.update(ctl.set_soundtrack(last))
+            else:
+                result.update(ctl.play(last))
         return jsonify(result), 201
 
     @app.delete("/api/media/<path:name>")
@@ -174,6 +179,15 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
         if not isinstance(name, str):
             raise MediaError("filename is required")
         return jsonify(ok=True, **ctl.play(name))
+
+    @app.post("/api/soundtrack")
+    def api_soundtrack():
+        # {"filename": "song.mp3"} plays it instead of the artwork's own sound;
+        # {"filename": null} goes back to the artwork's own sound.
+        name = _json_body().get("filename")
+        if name is not None and not isinstance(name, str):
+            raise MediaError("filename must be a string or null")
+        return jsonify(ok=True, **ctl.set_soundtrack(name))
 
     @app.post("/api/stop")
     def api_stop():
