@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <title>Frame</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body>
+<header>
+  <h1>Frame</h1>
+  <span id="health" class="badge {{ 'ok' if status.player.reachable else 'bad' }}">
+    {{ 'player online' if status.player.reachable else 'player offline' }}
+  </span>
+</header>
+
+<main>
+  <div id="toast" role="status" hidden></div>
+
+  <section class="card" id="now">
+    <h2>Now playing</h2>
+    <p class="current" id="current">{{ status.current or 'Nothing selected (black screen)' }}</p>
+    <p class="muted-text">
+      <span id="playback">{{ status.playback }}</span>
+    </p>
+    <div class="controls">
+      <button id="btn-pause" data-action="pause">Pause</button>
+      <button id="btn-resume" data-action="resume">Play</button>
+      <button id="btn-mute" data-action="mute" aria-pressed="{{ 'true' if status.muted else 'false' }}">
+        {{ 'Unmute' if status.muted else 'Mute' }}
+      </button>
+      <button data-action="stop" class="secondary">Black screen</button>
+    </div>
+    <label class="volume">
+      <span>Volume <output id="volume-out">{{ status.volume }}</output></span>
+      <input type="range" id="volume" min="0" max="100" step="1" value="{{ status.volume }}">
+    </label>
+  </section>
+
+  <section class="card" id="upload">
+    <h2>Upload artwork</h2>
+    <form id="upload-form">
+      <input type="file" name="file" id="file" accept="{{ accept }}" required>
+      <label class="check"><input type="checkbox" name="play" value="1"> Play after upload</label>
+      <button type="submit">Upload</button>
+      <progress id="upload-progress" max="100" value="0" hidden></progress>
+      <p class="hint">MP4 (H.264 + AAC) recommended. Max {{ max_upload_mb }} MB.</p>
+    </form>
+  </section>
+
+  <section class="card" id="library">
+    <h2>Library <span class="count">{{ media|length }}</span></h2>
+    {% if media %}
+    <ul class="media">
+      {% for m in media %}
+      <li class="{{ 'playing' if m.current else '' }}" data-name="{{ m.name }}">
+        <div class="info">
+          <span class="name">{{ m.name }}</span>
+          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.current %} · <strong>selected</strong>{% endif %}</span>
+        </div>
+        <div class="actions">
+          <button data-play="{{ m.name }}" {{ 'disabled' if m.current else '' }}>Play</button>
+          <button class="danger" data-delete="{{ m.name }}" data-current="{{ '1' if m.current else '' }}">Delete</button>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted-text">No artwork yet. Upload a video above.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" id="settings">
+    <h2>Display</h2>
+    <label>Rotation
+      <select data-setting="rotation">
+        {% for r in rotations %}<option value="{{ r }}" {{ 'selected' if r == status.rotation else '' }}>{{ r }}°</option>{% endfor %}
+      </select>
+    </label>
+    <label>Fit
+      <select data-setting="fit">
+        {% for f in fit_modes %}<option value="{{ f }}" {{ 'selected' if f == status.fit else '' }}>{{ {'fit': 'Fit (black bars)', 'fill': 'Fill (crop)', 'stretch': 'Stretch'}[f] }}</option>{% endfor %}
+      </select>
+    </label>
+    <details>
+      <summary>Advanced</summary>
+      <label>Audio output
+        <select data-setting="audio_device" id="audio-device" data-current="{{ status.audio_device }}">
+          <option value="auto">Automatic (HDMI with display)</option>
+          {% if status.audio_device != 'auto' %}<option value="{{ status.audio_device }}" selected>{{ status.audio_device }}</option>{% endif %}
+        </select>
+      </label>
+      <label>Hardware decoding
+        <select data-setting="hwdec">
+          {% for h in ['auto-safe', 'drm', 'v4l2m2m-copy', 'no'] %}<option value="{{ h }}" {{ 'selected' if h == status.hwdec else '' }}>{{ h }}</option>{% endfor %}
+          {% if status.hwdec not in ['auto-safe', 'drm', 'v4l2m2m-copy', 'no'] %}<option selected>{{ status.hwdec }}</option>{% endif %}
+        </select>
+      </label>
+      <p class="hint" id="diag">
+        Decoder: <span id="hwdec-current">{{ status.player.hwdec_current or '–' }}</span> ·
+        Display: {{ status.player.display or '–' }} ·
+        Player restarts: {{ status.player.restarts if status.player.restarts is not none else '–' }}
+      </p>
+    </details>
+  </section>
+</main>
+
+<footer>Frame {{ version }} · for use on your home network only</footer>
+</body>
+</html>
