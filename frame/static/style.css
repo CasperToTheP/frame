@@ -91,7 +91,7 @@ ul.media li.playing { background: var(--playing); border-radius: 10px; }
 .meta { font-size: .85rem; }
 .actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-#settings label, #now label.sound { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
+#settings label, .options label:not(.check) { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
 select { font: inherit; min-height: 40px; padding: 4px 8px; border-radius: 8px; max-width: 60%; }
 details { margin-top: 8px; }
 summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
@@ -102,3 +102,23 @@ summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
   background: var(--text); color: var(--bg);
 }
 #toast.error { background: var(--danger); color: #fff; }
+
+.error-text { color: var(--danger); font-size: .9rem; margin: 4px 0 0; }
+button.icon { min-width: 44px; padding: 8px 10px; }
+
+ol.queue { list-style: none; margin: 0 0 8px; padding: 0; counter-reset: q; }
+ol.queue li {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border-top: 1px solid var(--line); counter-increment: q;
+}
+ol.queue li:first-child { border-top: 0; }
+ol.queue li::before { content: counter(q); color: var(--muted); min-width: 1.4em; font-size: .85rem; }
+ol.queue li .name { flex: 1; min-width: 0; }
+ol.queue li.playing { background: var(--playing); border-radius: 10px; font-weight: 600; }
+.options { border-top: 1px solid var(--line); padding-top: 8px; }
+.options .check { margin: 8px 0; }
+
+/* Library rows: let the buttons drop below the name on narrow phones. */
+ul.media li { flex-wrap: wrap; }
+ul.media li .info { flex: 1 1 170px; }
+ul.media li .actions { margin-left: auto; }

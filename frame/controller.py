@@ -3,6 +3,11 @@
 Rule of thumb: persist first, then tell mpv. If mpv is down, the saved state is
 applied by the player service when it starts mpv again, so the user's choice is
 never lost.
+
+What plays (playlists, soundtracks, black screen) is decided by the player
+service's Director: the controller only saves the choice in state.json and the
+Director picks it up within half a second. Live settings (volume, pause,
+rotation...) still go straight to mpv.
 """
 
 from __future__ import annotations
@@ -14,9 +19,9 @@ from typing import Any
 
 from . import display
 from .config import Config
+from .director import NEXT_SOUND, NEXT_VISUAL
 from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
 from .player import (
-    InvalidMedia,
     MpvIpc,
     PlayerError,
     PlayerUnavailable,
@@ -26,6 +31,8 @@ from .player import (
 from .state import StateStore
 
 log = logging.getLogger("frame.control")
+
+OFFLINE_WARNING = "Player is not running; your choice is saved and starts when it recovers."
 
 
 class Controller:
@@ -42,9 +49,20 @@ class Controller:
 
     def status(self) -> dict[str, Any]:
         state = self.state.load()
+        supervisor = self._supervisor_status()
+        now = self._now_playing(state, supervisor.pop("playlist", None))
         out: dict[str, Any] = {
-            "current": state["current"],
-            "soundtrack": state["soundtrack"],
+            "current": now["visual"]["current"],
+            "soundtrack": now["sound"]["current"],
+            "now": now,
+            "playlist": state["playlist"],
+            "interval": state["interval"],
+            "shuffle": state["shuffle"],
+            "blank": state["blank"],
+            "sounds": state["sounds"],
+            "sound_interval": state["sound_interval"],
+            "sound_shuffle": state["sound_shuffle"],
+            "fade": state["fade"],
             "volume": state["volume"],
             "muted": state["muted"],
             "rotation": state["rotation"],
@@ -55,6 +73,9 @@ class Controller:
             "player": {"reachable": False},
             "playback": "unknown",
             "system_uptime": _system_uptime(),
+            # Lets the UI turn the player's "next_at" times into countdowns
+            # even if the phone's clock is off.
+            "server_time": time.time(),
         }
         try:
             paused = self.ipc.get("pause", False)
@@ -68,12 +89,22 @@ class Controller:
             out["playback"] = "idle" if idle else ("paused" if paused else "playing")
         except PlayerUnavailable:
             out["playback"] = "player offline"
-        try:
-            out["player"]["soundtrack_file"] = _basename(self.audio_ipc.get("path"))
-        except PlayerUnavailable:
-            out["player"]["soundtrack_file"] = None
-        out["player"].update(self._supervisor_status())
+        out["player"].update(supervisor)
         return out
+
+    def _now_playing(self, state: dict[str, Any], reported: Any) -> dict[str, Any]:
+        """What the player says it plays; failing that, what it will start with."""
+        if isinstance(reported, dict) and "visual" in reported and "sound" in reported:
+            return reported
+        visuals = [] if state["blank"] else self.library.playable(state["playlist"], VISUAL_KINDS)
+        sounds = self.library.playable(state["sounds"], ("audio",)) if visuals else []
+
+        def channel(items: list[str]) -> dict[str, Any]:
+            return {"current": items[0] if items else None, "position": 1 if items else None,
+                    "count": len(items), "next_at": None}
+
+        return {"visual": channel(visuals), "sound": channel(sounds), "paused": False,
+                "error": None}
 
     def _supervisor_status(self) -> dict[str, Any]:
         try:
@@ -86,106 +117,101 @@ class Controller:
             "mpv_uptime": round(time.time() - started) if started else None,
             "restarts": data.get("restarts"),
             "display": data.get("display"),
+            "playlist": data.get("playlist"),
         }
 
-    # --- playback -----------------------------------------------------------
+    # --- what plays -----------------------------------------------------------
 
     def play(self, name: str) -> dict[str, Any]:
-        """Select artwork. Returns {"warning": ...} if the player is offline."""
-        path = self.library.resolve(name)
-        if kind_of(name) not in VISUAL_KINDS:
-            raise MediaError(f"{name} is an audio file; choose it under Sound instead")
-        previous = self.state.load()["current"]
-        try:
-            self.ipc.load(path)
-            self._quiet_set("pause", False)
-        except InvalidMedia as exc:
-            log.error("invalid media %s: %s", name, exc)
-            self._restore(previous)
-            raise MediaError(f"cannot play {name}: {exc}", 422) from exc
-        except PlayerUnavailable:
-            self.state.update(current=name)
-            log.warning("artwork set to %s but player is offline; it will start with it", name)
-            return {"warning": "Player is not running; the artwork will start when it recovers."}
-        self.state.update(current=name)
-        log.info("artwork changed to %s", name)
-        self._quiet_sync_sound()
-        return {}
+        """Show just this artwork (a playlist of one, looping forever)."""
+        self._check(name, VISUAL_KINDS, "an audio file; add it to Sound instead")
+        self.state.update(playlist=[name], blank=False)
+        log.info("artwork set to %s", name)
+        return self._offline_warning()
+
+    def add(self, name: str) -> dict[str, Any]:
+        """Append a file to the playlist (visuals) or the sound list (audio)."""
+        self.library.resolve(name)
+        state = self.state.load()
+        if kind_of(name) == "audio":
+            if name not in state["sounds"]:
+                self.state.update(sounds=state["sounds"] + [name])
+        else:
+            self._check(name, VISUAL_KINDS, "not a visual")
+            changes: dict[str, Any] = {"blank": False}
+            if name not in state["playlist"]:
+                changes["playlist"] = state["playlist"] + [name]
+            self.state.update(**changes)
+        log.info("added %s", name)
+        return self._offline_warning()
+
+    def set_playlist(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change the visual playlist: items, interval, shuffle."""
+        return self._set_list(changes, "playlist", "interval", "shuffle", VISUAL_KINDS)
+
+    def set_sounds(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change the sound list: items, interval, shuffle. No items = artwork's own sound."""
+        return self._set_list(changes, "sounds", "sound_interval", "sound_shuffle", ("audio",))
+
+    def _set_list(self, changes: dict[str, Any], list_key: str, interval_key: str,
+                  shuffle_key: str, kinds: tuple[str, ...]) -> dict[str, Any]:
+        allowed = {"items", "interval", "shuffle"}
+        unknown = set(changes) - allowed
+        if unknown:
+            raise MediaError(f"unknown field(s): {', '.join(sorted(unknown))}")
+        update: dict[str, Any] = {}
+        if "items" in changes:
+            items = changes["items"]
+            if not isinstance(items, list):
+                raise MediaError("items must be a list of filenames")
+            for name in items:
+                if not isinstance(name, str):
+                    raise MediaError("items must be a list of filenames")
+                self._check(name, kinds, "not allowed in this list")
+            update[list_key] = items
+            if list_key == "playlist" and items:
+                update["blank"] = False
+        if "interval" in changes:
+            update[interval_key] = changes["interval"]
+        if "shuffle" in changes:
+            update[shuffle_key] = changes["shuffle"]
+        state = self.state.update(**update)
+        log.info("%s changed: %s", list_key, ", ".join(f"{k}={state[k]}" for k in update))
+        return {"items": state[list_key], "interval": state[interval_key],
+                "shuffle": state[shuffle_key], **self._offline_warning()}
 
     def set_soundtrack(self, name: str | None) -> dict[str, Any]:
-        """Play ``name`` (an audio file) instead of the artwork's own sound.
+        """One sound instead of the artwork's own (None = back to the artwork's own)."""
+        result = self.set_sounds({"items": [name] if name else []})
+        return {k: v for k, v in result.items() if k == "warning"}
 
-        ``None`` goes back to the artwork's own sound. The soundtrack loops on
-        its own, independently of the visual.
-        """
-        if name is not None:
-            self.library.resolve(name)
-            if kind_of(name) != "audio":
-                raise MediaError(f"{name} is not an audio file")
-        previous = self.state.load()["soundtrack"]
-        self.state.update(soundtrack=name)
-        try:
-            self._sync_sound()
-        except InvalidMedia as exc:
-            log.error("invalid soundtrack %s: %s", name, exc)
-            self.state.update(soundtrack=previous)
-            self._quiet_sync_sound()
-            raise MediaError(f"cannot play {name}: {exc}", 422) from exc
-        except PlayerUnavailable:
-            log.warning("sound set to %s but player is offline", name or "artwork's own")
-            return {"warning": "Player is not running; the sound will start when it recovers."}
-        log.info("sound changed to %s", name or "artwork's own")
-        return {}
-
-    def _sync_sound(self) -> None:
-        """Make the two players match the saved soundtrack choice.
-
-        Only one mpv may hold the HDMI audio device at a time, so the order
-        matters: the one that goes quiet releases the device first.
-        """
-        state = self.state.load()
-        path = self.library.soundtrack(state)
-        if path is not None:
-            self._quiet_set("aid", "no")
-            if self.audio_ipc.get("path") != str(path):
-                self.audio_ipc.load(path)
-            self.audio_ipc.set("pause", False)
-        else:
-            self._quiet_audio("stop")
-            self._wait_audio_idle()
-            self._quiet_set("aid", "auto")
-
-    def _quiet_sync_sound(self) -> None:
-        try:
-            self._sync_sound()
-        except PlayerError as exc:
-            log.warning("could not restore sound: %s", exc)
-
-    def _wait_audio_idle(self, timeout: float = 1.0) -> None:
-        end = time.monotonic() + timeout
-        while time.monotonic() < end:
-            try:
-                if self.audio_ipc.get("idle-active", True):
-                    return
-            except PlayerUnavailable:
-                return
-            time.sleep(0.05)
-
-    def _restore(self, previous: str | None) -> None:
-        try:
-            if previous and self.library.exists(previous):
-                self.ipc.load(self.library.resolve(previous))
-            else:
-                self.ipc.command("stop")
-        except PlayerError as exc:
-            log.warning("could not restore previous artwork: %s", exc)
+    def next(self, which: str) -> dict[str, Any]:
+        """Skip to the next visual or sound now (with a fade)."""
+        request = {"visual": NEXT_VISUAL, "sound": NEXT_SOUND}.get(which)
+        if request is None:
+            raise MediaError("which must be 'visual' or 'sound'")
+        self.cfg.run_dir.mkdir(parents=True, exist_ok=True)
+        (self.cfg.run_dir / request).touch()
+        return self._offline_warning()
 
     def stop(self) -> None:
-        """Show a black screen and forget the current artwork. Also silences the soundtrack."""
-        self.state.update(current=None)
-        self._quiet_command("stop")
-        self._quiet_audio("stop")
-        log.info("playback stopped")
+        """Black screen and silence. The playlists are kept for Start."""
+        self.state.update(blank=True)
+        log.info("black screen")
+
+    def start(self) -> None:
+        self.state.update(blank=False)
+        log.info("playback started")
+
+    def _check(self, name: str, kinds: tuple[str, ...], why: str) -> None:
+        self.library.resolve(name)  # 400 for bad names, 404 if missing
+        if kind_of(name) not in kinds:
+            raise MediaError(f"{name} is {why}")
+
+    def _offline_warning(self) -> dict[str, Any]:
+        return {} if self.ipc.ping() else {"warning": OFFLINE_WARNING}
+
+    # --- live playback settings ---------------------------------------------
 
     def pause(self) -> None:
         self.ipc.set("pause", True)
@@ -214,7 +240,7 @@ class Controller:
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         """Display/audio settings. All are applied live, without restarting mpv."""
-        allowed = {"rotation", "fit", "scaling", "audio_device", "hwdec"}
+        allowed = {"rotation", "fit", "scaling", "fade", "audio_device", "hwdec"}
         unknown = set(changes) - allowed
         if unknown:
             raise MediaError(f"unknown setting(s): {', '.join(sorted(unknown))}")
@@ -254,31 +280,27 @@ class Controller:
 
     def media(self) -> list[dict[str, Any]]:
         state = self.state.load()
+        now = self._now_playing(state, self._supervisor_status().get("playlist"))
         return [
-            dict(item.to_dict(), current=item.name == state["current"],
-                 soundtrack=item.name == state["soundtrack"])
+            dict(item.to_dict(),
+                 in_playlist=item.name in state["playlist"],
+                 in_sounds=item.name in state["sounds"],
+                 playing=item.name in (now["visual"]["current"], now["sound"]["current"]))
             for item in self.library.list()
         ]
 
     def delete(self, name: str, force: bool = False) -> None:
         self.library.resolve(name)  # validates / 404s first
         state = self.state.load()
-        if name == state["soundtrack"]:
+        lists = {k: state[k] for k in ("playlist", "sounds") if name in state[k]}
+        if lists:
             if not force:
                 raise MediaError(
-                    f"{name} is the selected sound; choose another sound first "
+                    f"{name} is in the {' and '.join(lists)}; remove it there first "
                     "or delete with force",
                     409,
                 )
-            self.set_soundtrack(None)
-        if name == state["current"]:
-            if not force:
-                raise MediaError(
-                    f"{name} is currently playing; choose other artwork first "
-                    "or delete with force to stop playback",
-                    409,
-                )
-            self.stop()
+            self.state.update(**{k: [n for n in v if n != name] for k, v in lists.items()})
         self.library.delete(name)
         log.info("deleted %s", name)
 
@@ -304,12 +326,6 @@ class Controller:
             pass
         except PlayerError as exc:
             log.warning("audio player rejected %s: %s", args, exc)
-
-    def _quiet_command(self, *args: Any) -> None:
-        try:
-            self.ipc.command(*args)
-        except PlayerError as exc:
-            log.debug("mpv command %s failed: %s", args[0], exc)
 
 
 def _basename(path: Any) -> str | None:

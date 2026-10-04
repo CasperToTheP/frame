@@ -158,6 +158,14 @@ installing; if one fails, note what `sudo frame-doctor` says.
       own sound comes back within a second or two.
 - [ ] Volume and mute work for both kinds of sound.
 
+**Playlists and fades**
+- [ ] Add 3 items to the playlist with **Change every 15 seconds**: they rotate in order,
+      fading through black, and the countdown on the page matches.
+- [ ] Images fade as smoothly as videos.
+- [ ] With two tracks in **Sound**, **Next track** fades the music out and the next one in.
+- [ ] Pause stops the countdown; **Black screen** then **Start** resumes the playlist.
+- [ ] After `sudo reboot` the playlist runs again by itself.
+
 **Performance**
 - [ ] **Display → Advanced → Decoder** shows a hardware decoder (not `no`) for an H.264 MP4.
 - [ ] A 1080p video plays smoothly. `frame-doctor` shows no under-voltage and a

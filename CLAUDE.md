@@ -29,13 +29,24 @@ Two systemd services, both running as the unprivileged system user `frame`:
 | Service | Module | Role |
 |---|---|---|
 | `frame-player.service` | `frame/player_service.py` | Supervisor. Starts the artwork mpv and an audio-only "soundtrack" mpv with the saved state, and treats them as a pair: if either exits, hangs (IPC health check) or the artwork mpv has no video output (`vo-configured` false), both restart with backoff. Waits for an HDMI display and restarts both on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
-| `frame-web.service` | `frame/web.py` (+ `controller.py`) | Flask app served by waitress on :8080. Server-rendered HTML + vanilla JS. Changes playback live over mpv JSON IPC. |
+| `frame-web.service` | `frame/web.py` (+ `controller.py`) | Flask app served by waitress on :8080. Server-rendered HTML + vanilla JS. Saves what to play in `state.json`; changes live settings (volume, pause, rotation...) over mpv JSON IPC. |
 
 Key rules:
 
-- **Persist first, then tell mpv.** The controller writes `state.json` and then sends the
-  IPC command. If mpv is down, the player service applies the saved state when it
+- **Persist first, then tell mpv.** The controller writes `state.json` and then (for live
+  settings) sends the IPC command. If mpv is down, the player service applies the saved state when it
   restarts mpv. Only the web service writes `state.json`; the player only reads it.
+- **The Director decides what plays** (`frame/director.py`, run by the supervisor every
+  0.5 s). It is the only code that loads files into either mpv: it steps through the
+  visual playlist and the sound list on their own clocks, applies changes the web UI
+  saved (it watches `state.json`'s mtime), and handles "next" requests, which the web
+  service makes by creating `/run/frame/next-visual` or `next-sound`. It publishes
+  what's playing in `player.json` (`playlist` key) for the UI. A broken file is skipped.
+- **Fades** go through black with mpv's `brightness` property (-100 = black) plus volume
+  ramps; `brightness` persists across `loadfile`, so the next file starts black and
+  fades in. Fades are best effort: a property mpv refuses is skipped, and brightness and
+  volume are always restored, so a fade problem can't leave the screen dark or stop the
+  playlist.
 - **mpv runs permanently** with `--idle=yes --force-window=yes` (a black screen when there's
   nothing to play). Artwork is switched with `loadfile`, never by restarting mpv.
   `MpvIpc` opens a short-lived connection per call, so there is no stale connection after
@@ -49,9 +60,8 @@ Key rules:
   `build_audio_args`), so a short GIF can loop over a long track. The vc4 HDMI PCM can
   only be opened once, so only one mpv may have audio: with a soundtrack the artwork mpv
   runs with `aid=no` (mpv then closes its audio output), and the audio mpv idles with no
-  file (device closed) otherwise. `Controller._sync_sound` switches in an order that
-  releases the device before the other player takes it. A soundtrack only plays while
-  a visual is selected (`MediaLibrary.soundtrack`).
+  file (device closed) otherwise. The Director switches in an order that releases the
+  device before the other player takes it. Sounds only play while a visual is showing.
 - Transparent images are blended on black, not mpv's default checkerboard. The option
   was renamed in mpv 0.38 (`--alpha=blend` before, `--background=color` after), so the
   supervisor reads `mpv --version` and `alpha_args()` picks the right one.
@@ -81,7 +91,8 @@ Key rules:
 | `/var/lib/frame/tmp/` | waitress upload spool |
 | `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
 | `/run/frame/audio.sock` | soundtrack mpv IPC socket |
-| `/run/frame/player.json` | supervisor health info, read by the UI |
+| `/run/frame/player.json` | supervisor health info and what's playing, read by the UI |
+| `/run/frame/next-visual`, `next-sound` | "skip now" requests from the web UI (deleted by the Director) |
 | `/etc/default/frame` | optional env overrides (`FRAME_*`, see `config.py`) |
 | `/etc/systemd/system/frame-*.service` | units (source in `systemd/`) |
 
@@ -131,7 +142,7 @@ state, and restarts running services. `doctor.sh` must stay read-only.
 
 ## Non-goals (for now)
 
-Cloud hosting, user accounts, internet/remote control, playlists, Spotify, a marketplace,
+Cloud hosting, user accounts, internet/remote control, Spotify, a marketplace,
 AI generation, automatic transcoding, motion sensors, Home Assistant, complex schedules,
 multi-screen, mobile apps, Docker. Scheduled screen on/off is a planned future feature:
 keep display power logic in `display.py`, driven by the player service.

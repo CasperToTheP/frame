@@ -44,8 +44,36 @@ async function act(method, url, body, { reload = false, ok } = {}) {
 
 // --- now playing ----------------------------------------------------------
 
+let nowState = JSON.parse(document.body.dataset.now || "{}");
+let clockOffset = 0; // server time minus phone time, in seconds
+
+function fmtCountdown(nextAt) {
+  if (!nextAt) return "";
+  const secs = Math.max(0, Math.round(nextAt - (Date.now() / 1000 + clockOffset)));
+  const m = Math.floor(secs / 60);
+  const s = String(secs % 60).padStart(2, "0");
+  return ` · next in ${m}:${s}`;
+}
+
+function renderCountdowns() {
+  const v = nowState.visual || {};
+  const snd = nowState.sound || {};
+  $("#position").textContent = v.count > 1 && v.position ? ` · ${v.position} of ${v.count}` : "";
+  $("#countdown").textContent = fmtCountdown(v.next_at);
+  $("#sound-countdown").textContent =
+    (snd.count > 1 && snd.position ? ` (${snd.position} of ${snd.count})` : "") + fmtCountdown(snd.next_at);
+}
+
 function renderStatus(s) {
-  $("#current").textContent = s.current || "Nothing selected (black screen)";
+  nowState = s.now || {};
+  if (s.server_time) clockOffset = s.server_time - Date.now() / 1000;
+  $("#current").textContent = nowState.visual?.current || "Nothing (black screen)";
+  $("#sound-now").textContent = nowState.sound?.current || "artwork's own";
+  const err = $("#player-error");
+  err.textContent = nowState.error || "";
+  err.hidden = !nowState.error;
+  $("#btn-next").hidden = !(nowState.visual?.count > 1);
+  renderCountdowns();
   $("#playback").textContent = s.playback;
   const health = $("#health");
   health.textContent = s.player.reachable ? "player online" : "player offline";
@@ -78,8 +106,10 @@ document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const action = btn.dataset.action;
     if (action === "stop") {
-      if (!confirm("Show a black screen?")) return;
+      if (!confirm("Show a black screen? The playlist is kept; tap Start to continue.")) return;
       act("POST", "/api/stop", {}, { reload: true });
+    } else if (action === "start") {
+      act("POST", "/api/start", {}, { reload: true });
     } else if (action === "mute") {
       act("POST", "/api/mute", {});
     } else {
@@ -107,30 +137,84 @@ document.querySelectorAll("[data-play]").forEach((btn) => {
   });
 });
 
-function setSound(name) {
-  return act("POST", "/api/soundtrack", { filename: name || null }, { reload: true });
-}
-
 document.querySelectorAll("[data-sound]").forEach((btn) => {
   btn.addEventListener("click", () => {
     btn.disabled = true;
-    setSound(btn.dataset.sound).finally(() => { btn.disabled = false; });
+    act("POST", "/api/soundtrack", { filename: btn.dataset.sound }, { reload: true })
+      .finally(() => { btn.disabled = false; });
   });
 });
 
-$("#soundtrack").addEventListener("change", (e) => setSound(e.target.value));
+document.querySelectorAll("[data-add]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    act("POST", "/api/add", { filename: btn.dataset.add }, { reload: true });
+  });
+});
+
+document.querySelectorAll("[data-next]").forEach((btn) => {
+  btn.addEventListener("click", () => act("POST", "/api/next", { which: btn.dataset.next }));
+});
+
+// --- playlist and sound list ------------------------------------------------
+
+const LIST_API = { playlist: "/api/playlist", sounds: "/api/sounds" };
+
+function listItems(id) {
+  return JSON.parse(document.getElementById(id).dataset.items || "[]");
+}
+
+function saveList(id, items) {
+  act("POST", LIST_API[id], { items }, { reload: true });
+}
+
+document.querySelectorAll("[data-move]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const id = btn.dataset.move;
+    const items = listItems(id);
+    const i = Number(btn.dataset.index);
+    const j = i + Number(btn.dataset.delta);
+    if (j < 0 || j >= items.length) return;
+    [items[i], items[j]] = [items[j], items[i]];
+    saveList(id, items);
+  });
+});
+
+document.querySelectorAll("[data-remove]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const id = btn.dataset.remove;
+    const items = listItems(id);
+    items.splice(Number(btn.dataset.index), 1);
+    saveList(id, items);
+  });
+});
+
+function bindOption(sel, url, field, convert) {
+  const el = $(sel);
+  if (!el) return;
+  el.addEventListener("change", () => {
+    act("POST", url, { [field]: convert(el) }, { reload: true, ok: "Saved" });
+  });
+}
+bindOption("#interval", "/api/playlist", "interval", (el) => Number(el.value));
+bindOption("#shuffle", "/api/playlist", "shuffle", (el) => el.checked);
+bindOption("#sound-interval", "/api/sounds", "interval", (el) => Number(el.value));
+bindOption("#sound-shuffle", "/api/sounds", "shuffle", (el) => el.checked);
+
+const ownSound = $("#btn-own-sound");
+if (ownSound) {
+  ownSound.addEventListener("click", () => act("POST", "/api/sounds", { items: [] }, { reload: true }));
+}
 
 document.querySelectorAll("[data-delete]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const name = btn.dataset.delete;
-    const inUse = btn.dataset.inUse;
-    const q = inUse === "current"
-      ? `"${name}" is playing. Stop it and delete it? The screen will go black.`
-      : inUse === "sound"
-        ? `"${name}" is the selected sound. Delete it? The artwork's own sound will play instead.`
-        : `Delete "${name}"? This cannot be undone.`;
+    const listed = btn.dataset.listed === "1";
+    const q = listed
+      ? `"${name}" is in the playlist or sound list. Remove it and delete the file? This cannot be undone.`
+      : `Delete "${name}"? This cannot be undone.`;
     if (!confirm(q)) return;
-    const url = `/api/media/${encodeURIComponent(name)}` + (inUse ? "?force=1" : "");
+    const url = `/api/media/${encodeURIComponent(name)}` + (listed ? "?force=1" : "");
     act("DELETE", url, undefined, { reload: true, ok: "Deleted" });
   });
 });
@@ -177,7 +261,7 @@ $("#upload-form").addEventListener("submit", (e) => {
 document.querySelectorAll("[data-setting]").forEach((sel) => {
   sel.addEventListener("change", () => {
     let value = sel.value;
-    if (sel.dataset.setting === "rotation") value = Number(value);
+    if (["rotation", "fade"].includes(sel.dataset.setting)) value = Number(value);
     act("POST", "/api/settings", { [sel.dataset.setting]: value }, { ok: "Saved" });
   });
 });
@@ -200,3 +284,4 @@ async function loadAudioDevices() {
 refreshStatus();
 loadAudioDevices();
 setInterval(() => { if (!document.hidden) refreshStatus(); }, 5000);
+setInterval(renderCountdowns, 1000);

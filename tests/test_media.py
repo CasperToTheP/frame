@@ -181,11 +181,9 @@ def test_svg_without_converter_is_a_clear_error(lib, monkeypatch):
     assert list(lib.incoming.iterdir()) == []
 
 
-def test_soundtrack_needs_visual_and_existing_audio(lib):
+def test_playable_filters_kind_and_missing(lib):
     upload(lib, "a.mp4", MP4)
     upload(lib, "song.mp3", MP3)
-    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "song.mp3"}).name == "song.mp3"
-    assert lib.soundtrack({"current": None, "soundtrack": "song.mp3"}) is None
-    assert lib.soundtrack({"current": "gone.mp4", "soundtrack": "song.mp3"}) is None
-    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "gone.mp3"}) is None
-    assert lib.soundtrack({"current": "a.mp4", "soundtrack": "a.mp4"}) is None
+    names = ["song.mp3", "gone.mp4", "a.mp4"]
+    assert lib.playable(names, ("video", "image")) == ["a.mp4"]
+    assert lib.playable(names, ("audio",)) == ["song.mp3"]

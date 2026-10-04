@@ -48,6 +48,9 @@ class FakeIpc:
             self.props["path"] = None
             self.props["idle-active"] = True
 
+    def ping(self):
+        return self.available
+
     def get(self, name, default=None):
         self._check()
         return self.props.get(name, default)

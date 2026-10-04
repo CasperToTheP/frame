@@ -254,19 +254,9 @@ class MediaLibrary:
         except MediaError:
             return False
 
-    def soundtrack(self, state: dict) -> Path | None:
-        """The soundtrack that should be playing, if any.
-
-        A soundtrack only plays alongside a visual (a black screen is silent),
-        and only if its file still exists.
-        """
-        name = state.get("soundtrack")
-        if not name or kind_of(name) != "audio" or not self.exists(state.get("current")):
-            return None
-        try:
-            return self.resolve(name)
-        except MediaError:
-            return None
+    def playable(self, names: list[str], kinds: tuple[str, ...]) -> list[str]:
+        """The names that exist in the library and are of one of ``kinds``, in order."""
+        return [n for n in names if kind_of(n) in kinds and self.exists(n)]
 
     def new_incoming_file(self) -> BinaryIO:
         """Open a temp file for an upload in progress (on the media filesystem)."""

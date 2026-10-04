@@ -1,7 +1,8 @@
 """frame-player.service: keep exactly one fullscreen mpv running, forever.
 
 A second, audio-only mpv runs next to it for separate soundtracks. The two are
-supervised as a pair: if either fails, both are restarted.
+supervised as a pair: if either fails, both are restarted. The Director
+(director.py) steps through the playlists and fades between items.
 
 Responsibilities:
   * start mpv with the saved artwork/volume/rotation (read from state.json)
@@ -26,13 +27,13 @@ import time
 
 from . import display
 from .config import Config, setup_logging
-from .media import MediaLibrary
+from .director import Director
 from .player import MpvIpc, PlayerUnavailable, build_audio_args, build_mpv_args, mpv_version
-from .state import StateStore
 
 log = logging.getLogger("frame.player")
 
-POLL_SECONDS = 2.0
+# Often enough for playlist timing and fades to feel exact.
+POLL_SECONDS = 0.5
 MIN_BACKOFF = 1.0
 MAX_BACKOFF = 60.0
 # A run longer than this counts as healthy and resets the backoff.
@@ -53,8 +54,6 @@ def next_backoff(current: float, ran_for: float) -> float:
 class Supervisor:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.state = StateStore(cfg.state_file)
-        self.library = MediaLibrary(cfg.media_dir, cfg.incoming_dir)
         self.proc: subprocess.Popen | None = None
         self.audio_proc: subprocess.Popen | None = None
         self.mpv_version: tuple[int, int] | None = None
@@ -68,6 +67,7 @@ class Supervisor:
         self._waiting_logged = False
         self.ipc = MpvIpc(cfg.mpv_socket, timeout=3.0)
         self.audio_ipc = MpvIpc(cfg.audio_socket, timeout=3.0)
+        self.director = Director(cfg, self.ipc, self.audio_ipc, sleep=self._sleep)
 
     def check_health(self) -> str | None:
         """None if mpv is healthy, otherwise a description of the problem."""
@@ -96,16 +96,8 @@ class Supervisor:
     # --- mpv lifecycle ------------------------------------------------------
 
     def start_mpv(self, connector: display.Connector | None) -> None:
-        state = self.state.load()
-        current = state.get("current")
-        media_path = None
-        if current:
-            if self.library.exists(current):
-                media_path = self.library.resolve(current)
-            else:
-                log.warning("saved artwork %r is missing; showing black screen", current)
-
-        soundtrack = self.library.soundtrack(state)
+        media_path, soundtrack = self.director.initial()
+        state = self.director.state
 
         audio = state.get("audio_device") or "auto"
         if audio == "auto":
@@ -140,7 +132,7 @@ class Supervisor:
             "starting mpv: display=%s audio=%s artwork=%s soundtrack=%s",
             f"{connector.card}/{connector.name}" if connector else "default",
             audio or "default",
-            current if media_path else "(none)",
+            media_path.name if media_path else "(none)",
             soundtrack.name if soundtrack else "(artwork's own)",
         )
         log.debug("mpv command: %s", " ".join(args))
@@ -176,6 +168,7 @@ class Supervisor:
             "last_exit_code": self.last_exit,
             "display": f"{self.connector.card}-{self.connector.name}" if self.connector else None,
             "audio_device": self.audio_device,
+            "playlist": self.director.status(),
             "updated_at": time.time(),
         }
         path = self.cfg.player_status_file
@@ -254,6 +247,11 @@ class Supervisor:
                     self.stop_mpv("audio player exited")
                     return f"audio player exited with code {code}"
             self._sleep(POLL_SECONDS)
+            if self.stopping:
+                break
+            self.director.tick()
+            if self.director.changed:
+                self.write_status()
 
             has_sysfs, _, now_connected = self._display_snapshot()
             if has_sysfs and (now_connected - connected):

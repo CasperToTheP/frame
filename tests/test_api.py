@@ -60,16 +60,11 @@ def test_upload_list_and_no_autoplay(client, ipc, cfg):
     media = client.get("/api/media").get_json()["media"]
     assert media == [
         {"name": "Sea_Waves.mp4", "kind": "video", "size": len(MP4),
-         "mtime": media[0]["mtime"], "current": False, "soundtrack": False}
+         "mtime": media[0]["mtime"], "in_playlist": False, "in_sounds": False,
+         "playing": False}
     ]
     assert list(cfg.incoming_dir.iterdir()) == []
 
-
-def test_upload_and_play(client, ipc, ctl):
-    res = post_file(client, "a.mkv", MKV, play="1")
-    assert res.status_code == 201
-    assert ("load", "a.mkv") in ipc.calls
-    assert ctl.state.load()["current"] == "a.mkv"
 
 
 def test_upload_duplicate_name(client):
@@ -108,15 +103,6 @@ def test_upload_missing_file(client):
     assert res.status_code == 400
 
 
-def test_play(client, ipc, ctl):
-    post_file(client, "a.mp4", MP4)
-    res = client.post("/api/play", json={"filename": "a.mp4"})
-    assert res.status_code == 200
-    assert ("load", "a.mp4") in ipc.calls
-    assert ("set", "pause", False) in ipc.calls
-    assert ctl.state.load()["current"] == "a.mp4"
-    assert client.get("/api/media").get_json()["media"][0]["current"] is True
-
 
 def test_play_missing_file(client):
     res = client.post("/api/play", json={"filename": "nope.mp4"})
@@ -132,24 +118,6 @@ def test_play_requires_json(client):
     assert res.status_code == 400
 
 
-def test_play_invalid_media_restores_previous(client, ipc, ctl):
-    post_file(client, "good.mp4", MP4)
-    post_file(client, "bad.mp4", MP4)
-    client.post("/api/play", json={"filename": "good.mp4"})
-    ipc.invalid.add("bad.mp4")
-    res = client.post("/api/play", json={"filename": "bad.mp4"})
-    assert res.status_code == 422
-    assert ipc.calls[-1] == ("load", "good.mp4")
-    assert ctl.state.load()["current"] == "good.mp4"
-
-
-def test_play_while_player_down_is_saved(client, ipc, ctl):
-    post_file(client, "a.mp4", MP4)
-    ipc.available = False
-    res = client.post("/api/play", json={"filename": "a.mp4"})
-    assert res.status_code == 200
-    assert "warning" in res.get_json()
-    assert ctl.state.load()["current"] == "a.mp4"
 
 
 def test_pause_resume(client, ipc):
@@ -219,17 +187,6 @@ def test_delete(client, cfg):
     assert client.delete("/api/media/a.mp4").status_code == 404
 
 
-def test_delete_current_needs_force(client, ipc, ctl, cfg):
-    post_file(client, "a.mp4", MP4)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    res = client.delete("/api/media/a.mp4")
-    assert res.status_code == 409
-    assert (cfg.media_dir / "a.mp4").exists()
-    res = client.delete("/api/media/a.mp4?force=1")
-    assert res.status_code == 200
-    assert ("command", "stop") in ipc.calls
-    assert ctl.state.load()["current"] is None
-
 
 def test_delete_traversal(client, cfg):
     cfg.data_dir.joinpath("state.json").write_text("{}")
@@ -237,12 +194,6 @@ def test_delete_traversal(client, cfg):
     assert res.status_code in (400, 404)
     assert cfg.data_dir.joinpath("state.json").exists()
 
-
-def test_stop(client, ipc, ctl):
-    post_file(client, "a.mp4", MP4)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    assert client.post("/api/stop").status_code == 200
-    assert ctl.state.load()["current"] is None
 
 
 def test_cross_origin_post_refused(client, ipc):
@@ -274,79 +225,10 @@ def test_upload_animated_webp_explains(client, cfg):
     assert list(cfg.incoming_dir.iterdir()) == []
 
 
-def test_audio_file_cannot_be_played_as_artwork(client):
-    post_file(client, "song.mp3", MP3)
-    res = client.post("/api/play", json={"filename": "song.mp3"})
-    assert res.status_code == 400
-    assert "Sound" in res.get_json()["error"]
 
 
-def test_soundtrack_replaces_artwork_sound(client, ipc, audio_ipc, ctl):
-    post_file(client, "a.mp4", MP4)
-    post_file(client, "song.mp3", MP3)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    res = client.post("/api/soundtrack", json={"filename": "song.mp3"})
-    assert res.status_code == 200
-    # The artwork's own sound goes off before the audio player takes the device.
-    assert ("set", "aid", "no") in ipc.calls
-    assert ("load", "song.mp3") in audio_ipc.calls
-    assert ctl.state.load()["soundtrack"] == "song.mp3"
-    media = {m["name"]: m for m in client.get("/api/media").get_json()["media"]}
-    assert media["song.mp3"]["soundtrack"] is True and media["song.mp3"]["kind"] == "audio"
-    assert client.get("/api/status").get_json()["soundtrack"] == "song.mp3"
-
-    # Back to the artwork's own sound.
-    audio_ipc.calls.clear()
-    ipc.calls.clear()
-    assert client.post("/api/soundtrack", json={"filename": None}).status_code == 200
-    assert audio_ipc.calls[0] == ("command", "stop")
-    assert ipc.calls[-1] == ("set", "aid", "auto")
-    assert ctl.state.load()["soundtrack"] is None
 
 
-def test_soundtrack_follows_artwork_changes(client, ipc, audio_ipc):
-    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("song.mp3", MP3)]:
-        post_file(client, name, data)
-    client.post("/api/soundtrack", json={"filename": "song.mp3"})
-    # Nothing on screen yet: the soundtrack waits for a visual.
-    assert not any(c[0] == "load" for c in audio_ipc.calls)
-    client.post("/api/play", json={"filename": "b.png"})
-    assert ("load", "song.mp3") in audio_ipc.calls
-    n = len(audio_ipc.calls)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    # Switching the visual doesn't restart the soundtrack.
-    assert ("load", "song.mp3") not in audio_ipc.calls[n:]
-    assert ipc.calls[-1] == ("set", "aid", "no")
-    client.post("/api/stop")
-    assert ("command", "stop") in audio_ipc.calls[n:]
-
-
-def test_soundtrack_rejects_non_audio_and_missing(client):
-    post_file(client, "a.mp4", MP4)
-    assert client.post("/api/soundtrack", json={"filename": "a.mp4"}).status_code == 400
-    assert client.post("/api/soundtrack", json={"filename": "x.mp3"}).status_code == 404
-    assert client.post("/api/soundtrack", json={"filename": 3}).status_code == 400
-
-
-def test_invalid_soundtrack_restores_previous(client, audio_ipc, ctl):
-    for name, data in [("a.mp4", MP4), ("good.mp3", MP3), ("bad.mp3", MP3)]:
-        post_file(client, name, data)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    client.post("/api/soundtrack", json={"filename": "good.mp3"})
-    audio_ipc.invalid.add("bad.mp3")
-    res = client.post("/api/soundtrack", json={"filename": "bad.mp3"})
-    assert res.status_code == 422
-    assert ctl.state.load()["soundtrack"] == "good.mp3"
-    assert audio_ipc.calls[-2] == ("load", "good.mp3")
-
-
-def test_upload_audio_with_play_sets_soundtrack(client, ctl):
-    post_file(client, "a.mp4", MP4)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    res = post_file(client, "song.mp3", MP3, play="1")
-    assert res.status_code == 201
-    state = ctl.state.load()
-    assert (state["current"], state["soundtrack"]) == ("a.mp4", "song.mp3")
 
 
 def test_volume_mute_pause_reach_both_players(client, ipc, audio_ipc):
@@ -359,26 +241,6 @@ def test_volume_mute_pause_reach_both_players(client, ipc, audio_ipc):
         assert ("set", "pause", True) in fake.calls
 
 
-def test_audio_player_down_does_not_break_artwork(client, ipc, audio_ipc, ctl):
-    post_file(client, "a.mp4", MP4)
-    post_file(client, "song.mp3", MP3)
-    client.post("/api/soundtrack", json={"filename": "song.mp3"})
-    audio_ipc.available = False
-    assert client.post("/api/play", json={"filename": "a.mp4"}).status_code == 200
-    assert ctl.state.load()["current"] == "a.mp4"
-    assert client.post("/api/volume", json={"volume": 20}).status_code == 200
-
-
-def test_delete_soundtrack_needs_force(client, ipc, ctl, cfg):
-    post_file(client, "a.mp4", MP4)
-    post_file(client, "song.mp3", MP3)
-    client.post("/api/play", json={"filename": "a.mp4"})
-    client.post("/api/soundtrack", json={"filename": "song.mp3"})
-    assert client.delete("/api/media/song.mp3").status_code == 409
-    assert client.delete("/api/media/song.mp3?force=1").status_code == 200
-    assert ctl.state.load()["soundtrack"] is None
-    assert ipc.calls[-1] == ("set", "aid", "auto")
-    assert ctl.state.load()["current"] == "a.mp4"
 
 
 def test_scaling_setting(client, ipc, ctl):
@@ -395,3 +257,163 @@ def test_svg_upload_becomes_png(client, cfg):
     assert res.get_json()["saved"] == ["logo.png"]
     assert (cfg.media_dir / "logo.png").read_bytes()[:8] == PNG[:8]
     assert list(cfg.incoming_dir.iterdir()) == []
+
+
+
+# --- playlists ------------------------------------------------------------------
+
+
+def state(ctl):
+    return ctl.state.load()
+
+
+def test_play_shows_only_that_artwork(client, ctl):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "b.png", PNG)
+    client.post("/api/playlist", json={"items": ["a.mp4", "b.png"]})
+    res = client.post("/api/play", json={"filename": "b.png"})
+    assert res.status_code == 200 and "warning" not in res.get_json()
+    assert state(ctl)["playlist"] == ["b.png"]
+    # The player picks this up from state.json; the web service doesn't load files itself.
+    assert client.get("/api/status").get_json()["current"] == "b.png"
+
+
+def test_play_missing_or_audio_or_traversal(client):
+    post_file(client, "song.mp3", MP3)
+    assert client.post("/api/play", json={"filename": "nope.mp4"}).status_code == 404
+    assert client.post("/api/play", json={"filename": "song.mp3"}).status_code == 400
+    assert client.post("/api/play", json={"filename": "../state.json"}).status_code == 400
+    assert client.post("/api/play", data={"filename": "a.mp4"}).status_code == 400
+
+
+def test_play_while_player_down_is_saved(client, ipc, ctl):
+    post_file(client, "a.mp4", MP4)
+    ipc.available = False
+    res = client.post("/api/play", json={"filename": "a.mp4"})
+    assert res.status_code == 200
+    assert "warning" in res.get_json()
+    assert state(ctl)["playlist"] == ["a.mp4"]
+
+
+def test_playlist_items_interval_shuffle(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("song.mp3", MP3)]:
+        post_file(client, name, data)
+    res = client.post("/api/playlist", json={"items": ["b.png", "a.mp4"], "interval": 60,
+                                             "shuffle": True})
+    assert res.status_code == 200
+    assert res.get_json()["items"] == ["b.png", "a.mp4"]
+    st = state(ctl)
+    assert (st["playlist"], st["interval"], st["shuffle"]) == (["b.png", "a.mp4"], 60, True)
+    # Audio, missing files and bad values are refused.
+    assert client.post("/api/playlist", json={"items": ["song.mp3"]}).status_code == 400
+    assert client.post("/api/playlist", json={"items": ["x.mp4"]}).status_code == 404
+    assert client.post("/api/playlist", json={"items": "a.mp4"}).status_code == 400
+    assert client.post("/api/playlist", json={"interval": -5}).status_code == 400
+    assert client.post("/api/playlist", json={"colour": "red"}).status_code == 400
+    assert state(ctl)["playlist"] == ["b.png", "a.mp4"]
+
+
+def test_sounds_list(client, ctl):
+    for name, data in [("a.mp4", MP4), ("s1.mp3", MP3), ("s2.mp3", MP3)]:
+        post_file(client, name, data)
+    res = client.post("/api/sounds", json={"items": ["s2.mp3", "s1.mp3"], "interval": 0,
+                                           "shuffle": True})
+    assert res.status_code == 200
+    st = state(ctl)
+    assert (st["sounds"], st["sound_interval"], st["sound_shuffle"]) == \
+        (["s2.mp3", "s1.mp3"], 0, True)
+    assert client.post("/api/sounds", json={"items": ["a.mp4"]}).status_code == 400
+    # One sound / back to the artwork's own sound (the older API).
+    assert client.post("/api/soundtrack", json={"filename": "s1.mp3"}).status_code == 200
+    assert state(ctl)["sounds"] == ["s1.mp3"]
+    assert client.post("/api/soundtrack", json={"filename": None}).status_code == 200
+    assert state(ctl)["sounds"] == []
+    assert client.post("/api/soundtrack", json={"filename": 3}).status_code == 400
+
+
+def test_add_puts_files_in_the_right_list(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("song.mp3", MP3)]:
+        post_file(client, name, data)
+    for name in ["a.mp4", "song.mp3", "b.png", "a.mp4"]:
+        assert client.post("/api/add", json={"filename": name}).status_code == 200
+    st = state(ctl)
+    assert (st["playlist"], st["sounds"]) == (["a.mp4", "b.png"], ["song.mp3"])
+    assert client.post("/api/add", json={"filename": "nope.gif"}).status_code == 404
+
+
+def test_upload_with_add(client, ctl):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "song.mp3", MP3, add="1")
+    st = state(ctl)
+    assert (st["playlist"], st["sounds"]) == (["a.mp4"], ["song.mp3"])
+
+
+def test_upload_with_play(client, ctl):
+    post_file(client, "a.mkv", MKV, play="1")
+    assert state(ctl)["playlist"] == ["a.mkv"]
+    post_file(client, "song.mp3", MP3, play="1")
+    assert state(ctl)["sounds"] == ["song.mp3"]
+
+
+def test_next_requests_reach_the_player(client, cfg):
+    assert client.post("/api/next", json={"which": "visual"}).status_code == 200
+    assert (cfg.run_dir / "next-visual").exists()
+    assert client.post("/api/next", json={"which": "sound"}).status_code == 200
+    assert (cfg.run_dir / "next-sound").exists()
+    assert client.post("/api/next", json={"which": "both"}).status_code == 400
+
+
+def test_black_screen_keeps_the_playlist(client, ctl):
+    post_file(client, "a.mp4", MP4, add="1")
+    assert client.post("/api/stop").status_code == 200
+    st = state(ctl)
+    assert st["blank"] is True and st["playlist"] == ["a.mp4"]
+    assert client.get("/api/status").get_json()["current"] is None
+    assert client.post("/api/start").status_code == 200
+    assert state(ctl)["blank"] is False
+    assert client.get("/api/status").get_json()["current"] == "a.mp4"
+
+
+def test_status_reports_what_the_player_plays(client, cfg):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "b.png", PNG, add="1")
+    cfg.run_dir.mkdir(parents=True, exist_ok=True)
+    reported = {"visual": {"current": "b.png", "position": 2, "count": 2, "next_at": 123.0},
+                "sound": {"current": None, "position": None, "count": 0, "next_at": None},
+                "paused": False, "error": None}
+    cfg.player_status_file.write_text(json.dumps({"mpv_running": True, "playlist": reported}))
+    data = client.get("/api/status").get_json()
+    assert data["current"] == "b.png"
+    assert data["now"]["visual"]["next_at"] == 123.0
+    assert "playlist" not in data["player"]
+    media = {m["name"]: m for m in client.get("/api/media").get_json()["media"]}
+    assert media["b.png"]["playing"] and not media["a.mp4"]["playing"]
+    assert media["a.mp4"]["in_playlist"]
+
+
+def test_delete_listed_file_needs_force(client, ctl, cfg):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "song.mp3", MP3, add="1")
+    for name in ["a.mp4", "song.mp3"]:
+        res = client.delete(f"/api/media/{name}")
+        assert res.status_code == 409
+        assert (cfg.media_dir / name).exists()
+        assert client.delete(f"/api/media/{name}?force=1").status_code == 200
+        assert not (cfg.media_dir / name).exists()
+    st = state(ctl)
+    assert (st["playlist"], st["sounds"]) == ([], [])
+
+
+def test_fade_setting(client, ctl):
+    assert client.post("/api/settings", json={"fade": 2}).status_code == 200
+    assert state(ctl)["fade"] == 2.0
+    assert client.post("/api/settings", json={"fade": 30}).status_code == 400
+
+
+def test_index_renders_playlists(client):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "b.gif", b"GIF89a" + b"\0" * 32, add="1")
+    post_file(client, "song.mp3", MP3, add="1")
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="playlist-items"' in html and 'id="sounds-items"' in html
+    assert "Change every" in html and "Change track" in html

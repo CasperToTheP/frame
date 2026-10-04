@@ -21,9 +21,16 @@ from .config import Config, setup_logging
 from .controller import Controller
 from .media import EXTENSIONS, MediaError, kind_of
 from .player import PlayerError, PlayerUnavailable
-from .state import FIT_MODES, ROTATIONS, SCALING_MODES, StateError
+from .state import FADES, FIT_MODES, ROTATIONS, SCALING_MODES, StateError
 
 log = logging.getLogger("frame.web")
+
+# Choices offered in the UI (the API accepts any number of seconds).
+INTERVALS = [(15, "15 seconds"), (30, "30 seconds"), (60, "1 minute"), (120, "2 minutes"),
+             (300, "5 minutes"), (600, "10 minutes"), (1800, "30 minutes"), (3600, "1 hour"),
+             (0, "Full length (images: 1 minute)")]
+SOUND_INTERVALS = [(0, "End of each track"), (60, "1 minute"), (300, "5 minutes"),
+                   (600, "10 minutes"), (1800, "30 minutes"), (3600, "1 hour")]
 
 
 class UploadRequest(Request):
@@ -121,6 +128,9 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             rotations=ROTATIONS,
             fit_modes=FIT_MODES,
             scaling_modes=SCALING_MODES,
+            fades=FADES,
+            intervals=INTERVALS,
+            sound_intervals=SOUND_INTERVALS,
             accept=",".join(sorted(EXTENSIONS)),
             max_upload_mb=cfg.max_upload_mb,
             version=__version__,
@@ -159,7 +169,11 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             log.info("uploaded %s (%d bytes)", name, (cfg.media_dir / name).stat().st_size)
             saved.append(name)
         result: dict[str, Any] = {"saved": saved}
-        if request.form.get("play") in ("1", "true", "on") and saved:
+        if request.form.get("add") in ("1", "true", "on"):
+            # Add to the playlist (visuals) or the sound list (audio).
+            for name in saved:
+                result.update(ctl.add(name))
+        elif request.form.get("play") in ("1", "true", "on") and saved:
             last = saved[-1]
             if kind_of(last) == "audio":
                 result.update(ctl.set_soundtrack(last))
@@ -189,9 +203,36 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             raise MediaError("filename must be a string or null")
         return jsonify(ok=True, **ctl.set_soundtrack(name))
 
+    @app.post("/api/add")
+    def api_add():
+        name = _json_body().get("filename")
+        if not isinstance(name, str):
+            raise MediaError("filename is required")
+        return jsonify(ok=True, **ctl.add(name))
+
+    @app.post("/api/playlist")
+    def api_playlist():
+        # Any of {"items": [...], "interval": seconds (0 = full length), "shuffle": bool}
+        return jsonify(ctl.set_playlist(_json_body()))
+
+    @app.post("/api/sounds")
+    def api_sounds():
+        # Any of {"items": [...], "interval": seconds (0 = whole track), "shuffle": bool}
+        return jsonify(ctl.set_sounds(_json_body()))
+
+    @app.post("/api/next")
+    def api_next():
+        # {"which": "visual"} or {"which": "sound"}
+        return jsonify(ok=True, **ctl.next(_json_body().get("which", "visual")))
+
     @app.post("/api/stop")
     def api_stop():
         ctl.stop()
+        return jsonify(ok=True)
+
+    @app.post("/api/start")
+    def api_start():
+        ctl.start()
         return jsonify(ok=True)
 
     @app.post("/api/pause")

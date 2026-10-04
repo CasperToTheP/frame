@@ -2,10 +2,10 @@
 
 Software for a wall-mounted digital art frame built from a Raspberry Pi and an HDMI monitor.
 
-You plug it in and the artwork you chose last time starts fullscreen and loops forever,
-with sound through the monitor's speakers. Artwork can be a video, a GIF or an image
-(NFTs included), and the sound can come from the artwork itself or from a separate audio
-file. Nothing else is ever on screen: no desktop,
+You plug it in and your artwork starts fullscreen and loops forever, with sound through
+the monitor's speakers. Show one piece, or a playlist that changes every few minutes with
+a soft fade through black. Artwork can be a video, a GIF or an image (NFTs included), and
+the sound can come from the artwork itself or from your own playlist of music. Nothing else is ever on screen: no desktop,
 no console, no cursor, no player controls. To change the artwork, open
 `http://frame.local:8080` on a phone or laptop on the same Wi-Fi. From there you can upload
 videos, pick what plays, and set volume, mute and screen rotation.
@@ -54,6 +54,8 @@ crashes, keeps playing when Wi-Fi drops, and needs no internet once the artwork 
 - **frame-web.service** serves the UI and the JSON API. It changes playback live through
   mpv's IPC socket, so mpv is never restarted just to switch artwork. Every change is saved
   to `state.json` first, so it survives reboots and player restarts.
+- The player service also runs the **playlists**: it moves to the next artwork or track on
+  a timer and fades between them, so playlists keep running without the web UI.
 - A **second, audio-only mpv** plays a separate soundtrack when you choose one. It loops on
   its own, independently of the artwork. Only one player uses the HDMI audio at a time:
   with a soundtrack chosen, the artwork's own sound is switched off.
@@ -144,31 +146,46 @@ Optional settings go in `/etc/default/frame`: port, upload size limit and log le
 ### Open the web UI
 `http://frame.local:8080` (or `http://<pi-ip>:8080`). Tip: add it to your phone's home screen.
 
-### Upload artwork
-In **Upload artwork**, choose a file and tap **Upload**. A progress bar shows while it
-uploads. Uploading doesn't change what's playing unless you tick **Play after upload**
-(for an audio file, that makes it the sound). See [Supported files](#supported-files).
-The default size limit is 4 GB, and an upload is refused if it would leave less than
-256 MB free on the SD card.
+### Upload
+In **Upload**, choose one or more files and tap **Upload**. A progress bar shows while it
+uploads. With **Add to playlist / sound** ticked (the default), visuals are added to the
+end of the playlist and audio files to the sound list. See
+[Supported files](#supported-files). The default size limit is 4 GB, and an upload is
+refused if it would leave less than 256 MB free on the SD card.
 
-### Select artwork
-Tap **Play** next to a file in the **Library**. The selection is saved and still applies
-after a reboot or power cut.
+### Playlist
+The **Playlist** is the artwork the frame shows, in order. Everything is saved and
+continues after a reboot or power cut.
+- **Add** next to a file in the **Library** puts it at the end. **↑ ↓** reorder, **✕**
+  removes from the playlist (the file stays in the Library).
+- **Play** next to a file shows only that one, looping forever. This replaces the
+  playlist.
+- **Change every**: how long each item stays, from 15 seconds to 1 hour. *Full length*
+  plays each video or GIF once through; images then stay for 1 minute. Videos shorter than
+  the interval loop until it's time to move on.
+- **Fade between items**: the picture fades to black and back (and so does the
+  artwork's own sound). *Off* cuts straight over.
+- **Shuffle** plays the items in random order, never the same one twice in a row.
+- **Next** under **Now playing** skips ahead now. The countdown shows when the next change
+  is due.
 
 ### Sound
-Under **Now playing**, **Sound** chooses what you hear:
-- **Artwork's own sound**: the audio inside the video file (the default). GIFs and images
-  are silent.
-- **An audio file** you uploaded: it plays instead, with any artwork, and loops on its own.
-  A 3-second GIF can play over a 4-minute track; switching artwork doesn't restart the
-  music. You can also tap **Play** next to an audio file in the Library.
+The **Sound** list chooses what you hear:
+- **Empty** (the default): each artwork's own sound, the audio inside the video file.
+  GIFs and images are silent.
+- **Audio files**: they play instead, as their own playlist, independent of the artwork.
+  A 3-second GIF can play over a 4-minute track, and changing artwork doesn't interrupt
+  the music. **Change track** at the end of each track or on a timer, with **Shuffle** and
+  **Next track**; tracks fade out and in. **Use artwork's own sound** empties the list.
+  **Play** next to an audio file plays only that one.
 
 The sound only plays while artwork is on screen: **Black screen** silences it too.
 
 ### Volume, mute and pause
 Use the slider and buttons under **Now playing**. Volume and mute are saved; pause isn't,
 because after a reboot the frame should always be playing. **Black screen** stops playback
-and leaves the screen black.
+and leaves the screen black without forgetting the playlist; **Start** brings it back.
+Pause also pauses the playlist timers.
 
 ### Rotation and fit
 Under **Display**:
@@ -182,8 +199,8 @@ Under **Display**:
   decoder is in use.
 
 ### Delete artwork
-Tap **Delete**. Deleting the file that's playing asks you to confirm, then shows a black
-screen.
+Tap the **bin** next to a file. If it's in the playlist or sound list, you're asked to
+confirm; it's removed from the list and the frame moves on to the next item.
 
 ### Reboot / shut down
 ```bash
@@ -211,17 +228,21 @@ The UI uses a small JSON API that you can also script against:
 
 | Method & path | Body | Does |
 |---|---|---|
-| `GET /api/status` | | current artwork, playback state, volume, mute, rotation, player health |
+| `GET /api/status` | | what's playing (`now`: position, count, next change), playlists, settings, player health |
 | `GET /api/media` | | list of files (+ free disk space) |
-| `POST /api/media` | multipart `file` (+ optional `play=1`) | upload |
-| `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for the playing file or the selected sound) |
-| `POST /api/play` | `{"filename": "art.mp4"}` | select artwork |
-| `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play an audio file instead of the artwork's own sound / go back to it |
-| `POST /api/stop` | | black screen |
+| `POST /api/media` | multipart `file` (one or more; + optional `add=1` or `play=1`) | upload |
+| `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for files in the playlist or sound list) |
+| `POST /api/play` | `{"filename": "art.mp4"}` | show only this artwork |
+| `POST /api/add` | `{"filename": "art.mp4"}` | add to the playlist (or, for audio, the sound list) |
+| `POST /api/playlist` | any of `{"items": [...], "interval": 300, "shuffle": false}` | the visual playlist; `interval` in seconds, `0` = full length |
+| `POST /api/sounds` | any of `{"items": [...], "interval": 0, "shuffle": false}` | the sound list; `[]` = artwork's own sound, `interval` `0` = whole track |
+| `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play only this audio file / back to the artwork's own sound |
+| `POST /api/next` | `{"which": "visual"}` or `{"which": "sound"}` | skip to the next item now |
+| `POST /api/stop` / `POST /api/start` | | black screen (keeps the playlist) / start again |
 | `POST /api/pause` / `POST /api/resume` | | pause / resume |
 | `POST /api/volume` | `{"volume": 60}` | volume 0–100 |
 | `POST /api/mute` | `{"muted": true}` or `{}` to toggle | mute |
-| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "scaling": "sharp", "audio_device": "auto", "hwdec": "auto-safe"}` | display/audio settings |
+| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "scaling": "sharp", "fade": 1, "audio_device": "auto", "hwdec": "auto-safe"}` | display/audio settings (`fade` in seconds, `0` = off) |
 | `GET /api/audio-devices` | | audio outputs mpv can see |
 
 Example: `curl -X POST -H 'Content-Type: application/json' -d '{"volume":40}' http://frame.local:8080/api/volume`
@@ -457,6 +478,7 @@ frame/
   display.py         HDMI connector + HDMI audio detection (sysfs)
   player.py          mpv command lines (artwork + soundtrack) + JSON IPC client
   player_service.py  frame-player: supervises both mpv processes
+  director.py        playlists: what plays when, and the fades in between
   controller.py      actions behind the API (play, volume, delete, ...)
   web.py             frame-web: Flask app + waitress entry point
   templates/, static/  the UI (server-rendered HTML, CSS, vanilla JS)
@@ -476,7 +498,7 @@ These are deliberately not in version 1:
   turn the display off and on. The hardware-specific code would go in `frame/display.py`.
 - Optional password for the web UI. `check_access()` in `frame/web.py` is the single place
   to add it.
-- Playlists or rotating artwork, thumbnails, Home Assistant integration.
+- Thumbnails, Home Assistant integration.
 - Importing NFTs straight from a wallet address.
 
 ## Licence

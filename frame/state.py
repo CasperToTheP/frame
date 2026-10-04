@@ -20,12 +20,28 @@ ROTATIONS = (0, 90, 180, 270)
 FIT_MODES = ("fit", "fill", "stretch")
 # "smooth" for photos and video; "sharp" keeps pixel art crisp when scaled up.
 SCALING_MODES = ("smooth", "sharp")
+# Fade to black (and audio fade) between playlist items, in seconds. 0 = cut.
+FADES = (0, 0.5, 1, 2, 3)
+MAX_FADE = 5
+MAX_PLAYLIST = 500
+MAX_INTERVAL = 24 * 3600
 
 DEFAULTS: dict[str, Any] = {
-    # Filename (not path) inside the media directory, or None for a black screen.
-    "current": None,
-    # Audio filename played (and looped) instead of the artwork's own sound, or None.
-    "soundtrack": None,
+    # Visual filenames (inside the media directory) played in order. One item
+    # loops forever; with more, the player moves on every `interval` seconds.
+    "playlist": [],
+    # Seconds per visual. 0 = play each video/GIF once through (images: 1 minute).
+    "interval": 300,
+    "shuffle": False,
+    # True = black screen and silence, without forgetting the playlist.
+    "blank": False,
+    # Audio filenames played instead of the artworks' own sound. Empty = the
+    # artwork's own sound. They loop on their own, independently of the visuals.
+    "sounds": [],
+    # Seconds per track. 0 = play each track to the end.
+    "sound_interval": 0,
+    "sound_shuffle": False,
+    "fade": 1.0,
     "volume": 70,
     "muted": False,
     "rotation": 0,
@@ -49,9 +65,26 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
     for key, value in changes.items():
         if key not in DEFAULTS:
             raise StateError(f"unknown setting: {key}")
-        if key in ("current", "soundtrack"):
-            if value is not None and (not isinstance(value, str) or not value):
-                raise StateError(f"{key} must be a filename or null")
+        if key in ("playlist", "sounds"):
+            if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+                raise StateError(f"{key} must be a list of filenames")
+            if len(value) > MAX_PLAYLIST:
+                raise StateError(f"{key} can hold at most {MAX_PLAYLIST} items")
+            value = list(dict.fromkeys(value))  # drop duplicates, keep order
+        elif key in ("interval", "sound_interval"):
+            if isinstance(value, bool) or not isinstance(value, int) or not (
+                0 <= value <= MAX_INTERVAL
+            ):
+                raise StateError(f"{key} must be a whole number of seconds (0-{MAX_INTERVAL})")
+        elif key in ("shuffle", "sound_shuffle", "blank"):
+            if not isinstance(value, bool):
+                raise StateError(f"{key} must be true or false")
+        elif key == "fade":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (
+                0 <= value <= MAX_FADE
+            ):
+                raise StateError(f"fade must be a number of seconds (0-{MAX_FADE})")
+            value = float(value)
         elif key == "volume":
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise StateError("volume must be a number 0-100")
@@ -95,6 +128,7 @@ class StateStore:
         if not isinstance(raw, dict):
             log.warning("state file %s is not a JSON object; using defaults", self.path)
             return state
+        _migrate(raw)
         # Validate key by key so one bad value doesn't discard everything else.
         for key, value in raw.items():
             try:
@@ -128,6 +162,18 @@ class StateStore:
             os.replace(self.path, self.path.with_name(self.path.name + ".corrupt"))
         except OSError:
             pass
+
+
+def _migrate(raw: dict[str, Any]) -> None:
+    """Upgrade settings saved by older versions (single artwork / soundtrack)."""
+    if "current" in raw:
+        current = raw.pop("current")
+        if "playlist" not in raw:
+            raw["playlist"] = [current] if isinstance(current, str) and current else []
+    if "soundtrack" in raw:
+        soundtrack = raw.pop("soundtrack")
+        if "sounds" not in raw:
+            raw["sounds"] = [soundtrack] if isinstance(soundtrack, str) and soundtrack else []
 
 
 def _fsync_dir(path: Path) -> None:

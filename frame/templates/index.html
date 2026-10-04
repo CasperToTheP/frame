@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
-<body>
+<body data-now="{{ status.now|tojson|forceescape }}">
 <header>
   <h1>Frame</h1>
   <span id="health" class="badge {{ 'ok' if status.player.reachable else 'bad' }}">
@@ -19,44 +19,102 @@
 <main>
   <div id="toast" role="status" hidden></div>
 
+  {% macro interval_select(id, options, value) -%}
+    <select id="{{ id }}">
+      {% for secs, label in options %}<option value="{{ secs }}" {{ 'selected' if secs == value else '' }}>{{ label }}</option>{% endfor %}
+      {% if value not in options|map('first')|list %}<option value="{{ value }}" selected>{{ value }} seconds</option>{% endif %}
+    </select>
+  {%- endmacro %}
+
+  {% macro item_list(id, items, now_name, empty_text) -%}
+    {% if items %}
+    <ol class="queue" id="{{ id }}-items">
+      {% for name in items %}
+      <li class="{{ 'playing' if name == now_name else '' }}">
+        <span class="name">{{ name }}</span>
+        <span class="actions">
+          <button class="icon" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>↑</button>
+          <button class="icon" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>↓</button>
+          <button class="icon danger" data-remove="{{ id }}" data-index="{{ loop.index0 }}" aria-label="Remove from list">✕</button>
+        </span>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted-text">{{ empty_text }}</p>
+    {% endif %}
+  {%- endmacro %}
+
+  {% set now = status.now %}
   <section class="card" id="now">
     <h2>Now playing</h2>
-    <p class="current" id="current">{{ status.current or 'Nothing selected (black screen)' }}</p>
+    <p class="current" id="current">{{ now.visual.current or 'Nothing (black screen)' }}</p>
     <p class="muted-text">
-      <span id="playback">{{ status.playback }}</span>
+      <span id="playback">{{ status.playback }}</span><span id="position"></span><span id="countdown"></span>
     </p>
+    <p class="muted-text" id="sound-line">Sound: <span id="sound-now">{{ now.sound.current or "artwork's own" }}</span><span id="sound-countdown"></span></p>
+    <p class="error-text" id="player-error" {{ '' if now.error else 'hidden' }}>{{ now.error or '' }}</p>
     <div class="controls">
       <button id="btn-pause" data-action="pause">Pause</button>
       <button id="btn-resume" data-action="resume">Play</button>
+      <button id="btn-next" data-next="visual" {{ '' if now.visual.count > 1 else 'hidden' }}>Next</button>
       <button id="btn-mute" data-action="mute" aria-pressed="{{ 'true' if status.muted else 'false' }}">
         {{ 'Unmute' if status.muted else 'Mute' }}
       </button>
+      {% if status.blank %}
+      <button data-action="start">Start</button>
+      {% else %}
       <button data-action="stop" class="secondary">Black screen</button>
+      {% endif %}
     </div>
-    {% set audios = media|selectattr('kind', 'equalto', 'audio')|list %}
-    <label class="sound">Sound
-      <select id="soundtrack">
-        <option value="">Artwork's own sound</option>
-        {% for a in audios %}<option value="{{ a.name }}" {{ 'selected' if a.soundtrack else '' }}>{{ a.name }}</option>{% endfor %}
-      </select>
-    </label>
-    {% if not audios %}<p class="hint">Upload an audio file (MP3, M4A, WAV, FLAC…) to play it with any artwork. It loops on its own.</p>{% endif %}
     <label class="volume">
       <span>Volume <output id="volume-out">{{ status.volume }}</output></span>
       <input type="range" id="volume" min="0" max="100" step="1" value="{{ status.volume }}">
     </label>
   </section>
 
+  <section class="card" id="playlist" data-items="{{ status.playlist|tojson|forceescape }}">
+    <h2>Playlist <span class="count">{{ status.playlist|length }}</span></h2>
+    {{ item_list('playlist', status.playlist, now.visual.current,
+                 'Empty. Tap Add next to artwork in the Library.') }}
+    <div class="options">
+      <label>Change every {{ interval_select('interval', intervals, status.interval) }}</label>
+      <label>Fade between items
+        <select data-setting="fade">
+          {% for f in fades %}<option value="{{ f }}" {{ 'selected' if f == status.fade else '' }}>{{ 'Off' if f == 0 else f ~ ' s' }}</option>{% endfor %}
+          {% if status.fade not in fades %}<option value="{{ status.fade }}" selected>{{ status.fade }} s</option>{% endif %}
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="shuffle" {{ 'checked' if status.shuffle else '' }}> Shuffle</label>
+    </div>
+  </section>
+
+  <section class="card" id="sounds" data-items="{{ status.sounds|tojson|forceescape }}">
+    <h2>Sound <span class="count">{{ status.sounds|length }}</span></h2>
+    {{ item_list('sounds', status.sounds, now.sound.current,
+                 "Each artwork's own sound. Add audio files from the Library to play music instead; it loops on its own.") }}
+    {% if status.sounds %}
+    <div class="options">
+      <label>Change track {{ interval_select('sound-interval', sound_intervals, status.sound_interval) }}</label>
+      <label class="check"><input type="checkbox" id="sound-shuffle" {{ 'checked' if status.sound_shuffle else '' }}> Shuffle</label>
+      <div class="controls">
+        <button data-next="sound" {{ '' if status.sounds|length > 1 else 'hidden' }}>Next track</button>
+        <button class="secondary" id="btn-own-sound">Use artwork's own sound</button>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
   <section class="card" id="upload">
-    <h2>Upload artwork</h2>
+    <h2>Upload</h2>
     <form id="upload-form">
-      <input type="file" name="file" id="file" accept="{{ accept }}" required>
-      <label class="check"><input type="checkbox" name="play" value="1"> Play after upload</label>
+      <input type="file" name="file" id="file" accept="{{ accept }}" multiple required>
+      <label class="check"><input type="checkbox" name="add" value="1" checked> Add to playlist / sound</label>
       <button type="submit">Upload</button>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
       <p class="hint">
         Video (MP4 recommended), GIF, images (JPG, PNG, WebP, SVG…) or audio
-        (MP3, M4A, WAV, FLAC…). Audio files become the sound. Max {{ max_upload_mb }} MB.
+        (MP3, M4A, WAV, FLAC…). You can pick several files. Max {{ max_upload_mb }} MB.
       </p>
     </form>
   </section>
@@ -66,25 +124,26 @@
     {% if media %}
     <ul class="media">
       {% for m in media %}
-      {% set in_use = m.current or m.soundtrack %}
-      <li class="{{ 'playing' if in_use else '' }}" data-name="{{ m.name }}">
+      {% set listed = m.in_sounds if m.kind == 'audio' else m.in_playlist %}
+      <li class="{{ 'playing' if m.playing else '' }}" data-name="{{ m.name }}">
         <div class="info">
           <span class="name">{{ m.name }}</span>
-          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.current %} · <strong>selected</strong>{% elif m.soundtrack %} · <strong>sound</strong>{% endif %}</span>
+          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.playing %} · <strong>playing</strong>{% elif listed %} · in {{ 'sound' if m.kind == 'audio' else 'playlist' }}{% endif %}</span>
         </div>
         <div class="actions">
           {% if m.kind == 'audio' %}
-          <button data-sound="{{ m.name }}" {{ 'disabled' if m.soundtrack else '' }}>Play</button>
+          <button data-sound="{{ m.name }}" title="Play only this sound">Play</button>
           {% else %}
-          <button data-play="{{ m.name }}" {{ 'disabled' if m.current else '' }}>Play</button>
+          <button data-play="{{ m.name }}" title="Show only this artwork">Play</button>
           {% endif %}
-          <button class="danger" data-delete="{{ m.name }}" data-in-use="{{ 'current' if m.current else ('sound' if m.soundtrack else '') }}">Delete</button>
+          <button class="secondary" data-add="{{ m.name }}" {{ 'disabled' if listed else '' }}>{{ 'Added' if listed else 'Add' }}</button>
+          <button class="danger icon" data-delete="{{ m.name }}" data-listed="{{ '1' if (m.in_playlist or m.in_sounds) else '' }}" aria-label="Delete {{ m.name }}">🗑</button>
         </div>
       </li>
       {% endfor %}
     </ul>
     {% else %}
-    <p class="muted-text">No artwork yet. Upload a video, GIF or image above.</p>
+    <p class="muted-text">Nothing yet. Upload videos, GIFs, images or music above.</p>
     {% endif %}
   </section>
 

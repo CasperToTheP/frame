@@ -205,3 +205,64 @@ def test_soundtrack_formats_play_and_loop(audio_mpv, ext):
     assert ipc.get("idle-active") is False
     ipc.command("stop")
     assert wait_for(lambda: ipc.get("idle-active")) is True
+
+
+def test_director_with_real_players(tmp_path):
+    """Playlists, fades and soundtrack hand-over with two real mpv processes."""
+    from frame.config import Config
+    from frame.director import Director
+    from frame.state import StateStore
+
+    cfg = Config(data_dir=tmp_path / "data", run_dir=tmp_path / "run")
+    cfg.media_dir.mkdir(parents=True)
+    cfg.run_dir.mkdir(parents=True)
+    make_clip(cfg.media_dir / "a.mp4", seconds=1)
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=64x48:rate=1:duration=1", "-frames:v", "1",
+           str(cfg.media_dir / "b.png"))
+    for name in ("s1.mp3", "s2.mp3"):
+        ffmpeg("-f", "lavfi", "-i", "sine=frequency=330:duration=30", str(cfg.media_dir / name))
+    store = StateStore(cfg.state_file)
+    store.update(playlist=["a.mp4", "b.png"], interval=2, fade=0.5, volume=50)
+
+    vproc, video = start(build_mpv_args("mpv", cfg.mpv_socket, store.load(), None,
+                                        mpv_version=mpv_version("mpv")), cfg.mpv_socket)
+    aproc, audio = start(build_audio_args("mpv", cfg.audio_socket, store.load(), None),
+                         cfg.audio_socket)
+    try:
+        d = Director(cfg, video, audio)
+        first, sound = d.initial()
+        assert sound is None
+        video.load(first)
+
+        def run(seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                d.tick()
+                time.sleep(0.1)
+
+        run(3.5)  # 2 s per item: it moved on to the image
+        assert video.get("path") == str(cfg.media_dir / "b.png")
+        assert video.get("brightness") == 0 and video.get("volume") == 50
+
+        # Music from a separate list: the video's own sound goes off first.
+        store.update(sounds=["s1.mp3", "s2.mp3"], sound_interval=2)
+        run(0.5)
+        assert video.get("aid") is False  # mpv reports aid=no as false
+        assert audio.get("path") == str(cfg.media_dir / "s1.mp3")
+        run(3)
+        assert audio.get("path") == str(cfg.media_dir / "s2.mp3")
+        assert audio.get("volume") == 50
+
+        # Skip on request, then black screen.
+        (cfg.run_dir / "next-visual").touch()
+        before = video.get("path")
+        run(1.5)
+        assert video.get("path") != before
+        store.update(blank=True)
+        run(1.5)
+        assert video.get("idle-active") is True and audio.get("idle-active") is True
+        assert video.get("aid") == "auto"  # the next artwork gets its own sound back
+    finally:
+        for proc in (vproc, aproc):
+            proc.terminate()
+            proc.wait(5)

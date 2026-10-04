@@ -57,7 +57,7 @@ def test_start_mpv_uses_saved_state_and_display(cfg, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
     cfg.media_dir.mkdir(parents=True)
     (cfg.media_dir / "a.mp4").write_bytes(MP4)
-    StateStore(cfg.state_file).update(current="a.mp4", volume=12, rotation=180)
+    StateStore(cfg.state_file).update(playlist=["a.mp4"], volume=12, rotation=180)
     conn = cfg.sys_drm / "card1-HDMI-A-1"
     conn.mkdir(parents=True)
     (conn / "status").write_text("connected\n")
@@ -85,7 +85,7 @@ def test_start_mpv_with_soundtrack(cfg, monkeypatch):
     cfg.media_dir.mkdir(parents=True)
     (cfg.media_dir / "a.png").write_bytes(MP4)
     (cfg.media_dir / "song.mp3").write_bytes(MP4)
-    StateStore(cfg.state_file).update(current="a.png", soundtrack="song.mp3", volume=33)
+    StateStore(cfg.state_file).update(playlist=["a.png"], sounds=["song.mp3"], volume=33)
     Supervisor(cfg).start_mpv(None)
     args, audio_args = FakePopen.instances[-2].args, FakePopen.instances[-1].args
     assert "--aid=no" in args
@@ -102,7 +102,7 @@ def test_watch_restarts_pair_when_audio_player_dies(cfg, monkeypatch):
 
 def test_start_mpv_with_missing_artwork_shows_black(cfg, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
-    StateStore(cfg.state_file).update(current="gone.mp4")
+    StateStore(cfg.state_file).update(playlist=["gone.mp4"])
     Supervisor(cfg).start_mpv(None)
     assert "--" not in FakePopen.instances[-2].args
 
