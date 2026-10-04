@@ -21,6 +21,7 @@ from . import display
 from .config import Config
 from .director import NEXT_SOUND, NEXT_VISUAL
 from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
+from .mediainfo import pi_warning
 from .player import (
     MpvIpc,
     PlayerError,
@@ -285,9 +286,14 @@ class Controller:
             dict(item.to_dict(),
                  in_playlist=item.name in state["playlist"],
                  in_sounds=item.name in state["sounds"],
-                 playing=item.name in (now["visual"]["current"], now["sound"]["current"]))
+                 playing=item.name in (now["visual"]["current"], now["sound"]["current"]),
+                 warning=self.heavy_warning(item.name) if item.kind != "audio" else None)
             for item in self.library.list()
         ]
+
+    def heavy_warning(self, name: str) -> str | None:
+        """Advice if ``name`` is likely too heavy for a Pi 4 (None if fine or unknown)."""
+        return pi_warning(self.library.dir / name)
 
     def delete(self, name: str, force: bool = False) -> None:
         self.library.resolve(name)  # validates / 404s first

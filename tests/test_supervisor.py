@@ -207,3 +207,143 @@ def test_watch_skips_health_check_while_display_unplugged(cfg, monkeypatch):
     sup._sleep = lambda s: next(n, None) is None and setattr(sup, "stopping", True)
     assert sup.watch(frozenset({"card1-HDMI-A-1"})) is None
     assert checks == [] and stopped == []
+
+
+# --- stuck players and hang reboots ---------------------------------------------
+
+
+class StuckPopen(FakePopen):
+    """A process blocked in a driver: it ignores every signal."""
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired("mpv", timeout)
+
+
+def test_stop_never_waits_forever_for_a_stuck_player(cfg):
+    proc = StuckPopen(["mpv"])
+    assert player_service._stop_process(proc, cfg.mpv_socket) is False
+    ok = FakePopen(["mpv"])
+    assert player_service._stop_process(ok, cfg.mpv_socket) is True
+
+
+def test_stuck_player_asks_for_a_reboot(cfg, monkeypatch):
+    monkeypatch.setattr(subprocess, "Popen", StuckPopen)
+    cfg.media_dir.mkdir(parents=True)
+    for name in ("a.mp4", "big.mp4"):
+        (cfg.media_dir / name).write_bytes(MP4)
+    StateStore(cfg.state_file).update(playlist=["a.mp4", "big.mp4"])
+    sup = Supervisor(cfg)
+
+    def watch(connected):
+        sup.director.visual.loading = "big.mp4"  # it hung while opening this file
+        sup.stop_mpv("unhealthy")
+        return "unhealthy"
+
+    sup.watch = watch
+    assert sup.run() == player_service.REBOOT_EXIT_CODE
+    record = player_service._read_json(sup.hang_file)
+    assert record["file"] == "big.mp4" and len(record["reboots"]) == 1
+
+
+def test_reboots_are_rate_limited(cfg):
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    sup = Supervisor(cfg)
+    now = time.time()
+    old = now - player_service.REBOOT_WINDOW - 10
+    player_service._write_json(sup.hang_file, {"reboots": [old, now - 60, now - 30]})
+    sup.stuck = [1]
+    assert sup.handle_stuck() is True  # the old reboot no longer counts
+    sup.stuck = [1]
+    assert sup.handle_stuck() is False  # three in the window: retry instead
+    assert sup.stuck == []
+
+
+def test_file_that_hung_is_skipped_after_the_reboot(cfg):
+    cfg.media_dir.mkdir(parents=True)
+    for name in ("a.mp4", "big.mp4", "c.mp4"):
+        (cfg.media_dir / name).write_bytes(MP4)
+    StateStore(cfg.state_file).update(playlist=["big.mp4", "a.mp4", "c.mp4"])
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    player_service._write_json(cfg.data_dir / "hang.json",
+                               {"reboots": [time.time()], "file": "big.mp4",
+                                "at": time.time() + 5})
+    sup = Supervisor(cfg)
+    sup.skip_after_hang()
+    visual, _ = sup.director.initial()
+    assert visual.name == "a.mp4"
+    assert "big.mp4" in sup.director.error
+
+
+def test_hang_file_forgotten_once_the_playlist_changes(cfg):
+    cfg.media_dir.mkdir(parents=True)
+    for name in ("a.mp4", "big.mp4"):
+        (cfg.media_dir / name).write_bytes(MP4)
+    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    player_service._write_json(cfg.data_dir / "hang.json",
+                               {"file": "big.mp4", "at": time.time() - 3600})
+    StateStore(cfg.state_file).update(playlist=["big.mp4", "a.mp4"])  # edited after
+    sup = Supervisor(cfg)
+    sup.skip_after_hang()
+    assert sup.director.initial()[0].name == "big.mp4"
+
+
+# --- freeze watchdog --------------------------------------------------------------
+
+
+def frozen_env(cfg, monkeypatch, playlist=("a.mp4", "b.mp4"), **props):
+    from .conftest import FakeIpc
+
+    cfg.media_dir.mkdir(parents=True, exist_ok=True)
+    for name in playlist:
+        (cfg.media_dir / name).write_bytes(MP4)
+    StateStore(cfg.state_file).update(playlist=list(playlist))
+    monkeypatch.setattr(player_service, "FREEZE_SECONDS", 0)
+    monkeypatch.setattr(player_service, "FREEZE_CHECK_EVERY", 0)
+    sup, stopped = running_supervisor(cfg, monkeypatch, lambda: None)
+    ipc = FakeIpc()
+    ipc.props.update({"duration": 30.0, "time-pos": 4.2, **props})
+    sup.ipc = sup.director.ipc = ipc
+    sup.director.initial()
+    sup.director.tick = lambda: None
+    return sup, stopped, ipc
+
+
+def test_frozen_picture_restarts_players_and_skips_the_file(cfg, monkeypatch):
+    sup, stopped, _ = frozen_env(cfg, monkeypatch)
+    assert sup.watch(frozenset()) == "picture frozen (a.mp4)"
+    assert stopped == ["picture frozen: a.mp4"]
+    assert sup.director.visual.current == "b.mp4"
+    assert "a.mp4" in sup.director.error
+
+
+def test_only_artwork_is_retried_not_skipped(cfg, monkeypatch):
+    sup, stopped, _ = frozen_env(cfg, monkeypatch, playlist=("a.mp4",))
+    assert sup.watch(frozenset()) == "picture frozen (a.mp4)"
+    assert sup.director.visual.current == "a.mp4"
+
+
+@pytest.mark.parametrize("props", [{"pause": True}, {"duration": 0.04}, {"time-pos": None}])
+def test_watchdog_ignores_paused_and_still_pictures(cfg, monkeypatch, props):
+    sup, stopped, _ = frozen_env(cfg, monkeypatch, **props)
+    n = iter(range(10))
+    sup._sleep = lambda s: next(n, None) is None and setattr(sup, "stopping", True)
+    assert sup.watch(frozenset()) is None and stopped == []
+
+
+def test_moving_picture_is_left_alone(cfg, monkeypatch):
+    sup, stopped, ipc = frozen_env(cfg, monkeypatch)
+    n = iter(range(10))
+
+    def step(_seconds):
+        ipc.props["time-pos"] += 0.5
+        if next(n, None) is None:
+            sup.stopping = True
+
+    sup._sleep = step
+    assert sup.watch(frozenset()) is None and stopped == []

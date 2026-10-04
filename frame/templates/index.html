@@ -129,6 +129,7 @@
         <div class="info">
           <span class="name">{{ m.name }}</span>
           <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.playing %} · <strong>playing</strong>{% elif listed %} · in {{ 'sound' if m.kind == 'audio' else 'playlist' }}{% endif %}</span>
+          {% if m.warning %}<span class="warn-text">⚠ {{ m.warning }}</span>{% endif %}
         </div>
         <div class="actions">
           {% if m.kind == 'audio' %}

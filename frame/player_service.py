@@ -10,6 +10,9 @@ Responsibilities:
   * wait for an HDMI display before starting, and restart mpv when the display
     is reconnected so the video mode and HDMI audio are set up again
   * publish a tiny health file at /run/frame/player.json for the web UI
+  * restart both players if a video's picture stops moving (freeze watchdog)
+  * reboot the Pi if mpv gets stuck in the kernel, which happens when the
+    VideoCore graphics firmware hangs: nothing short of a reboot recovers that
 
 It deliberately does not import Flask or talk to the web service: playback must
 keep working even if the web UI is down.
@@ -24,11 +27,20 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from . import display
 from .config import Config, setup_logging
 from .director import Director
-from .player import MpvIpc, PlayerUnavailable, build_audio_args, build_mpv_args, mpv_version
+from .media import kind_of
+from .player import (
+    MpvIpc,
+    PlayerError,
+    PlayerUnavailable,
+    build_audio_args,
+    build_mpv_args,
+    mpv_version,
+)
 
 log = logging.getLogger("frame.player")
 
@@ -43,6 +55,20 @@ HEALTHY_RUN = 60.0
 HEALTH_EVERY = 10.0
 STARTUP_GRACE = 15.0
 MAX_HEALTH_FAILURES = 3
+# Freeze watchdog: a playing video or GIF whose position hasn't moved for this
+# long (while not paused) has a frozen picture.
+FREEZE_SECONDS = 15.0
+FREEZE_CHECK_EVERY = 2.5
+# Shorter files are left alone: a one-frame "video" never moves.
+FREEZE_MIN_DURATION = 1.0
+# After SIGKILL, a process that still hasn't exited is stuck in the kernel.
+KILL_WAIT = 20.0
+# Exit code that asks systemd to reboot (ExecStopPost in frame-player.service).
+REBOOT_EXIT_CODE = 75
+# Never reboot more often than this, so a fault that comes straight back can't
+# turn into a reboot loop. Over the limit, the supervisor keeps retrying instead.
+MAX_REBOOTS = 3
+REBOOT_WINDOW = 6 * 3600
 
 
 def next_backoff(current: float, ran_for: float) -> float:
@@ -65,6 +91,8 @@ class Supervisor:
         self.audio_device: str | None = None
         self.stopping = False
         self._waiting_logged = False
+        # PIDs of players that could not be stopped (stuck in the kernel).
+        self.stuck: list[int] = []
         self.ipc = MpvIpc(cfg.mpv_socket, timeout=3.0)
         self.audio_ipc = MpvIpc(cfg.audio_socket, timeout=3.0)
         self.director = Director(cfg, self.ipc, self.audio_ipc, sleep=self._sleep)
@@ -81,6 +109,65 @@ class Supervisor:
         if self.audio_proc is not None and not self.audio_ipc.ping():
             return "audio player not answering on IPC"
         return None
+
+    def playback_position(self) -> float | None:
+        """Position of a playing video or GIF, or None when the freeze watchdog
+        doesn't apply (paused, idle, an image, a very short file)."""
+        if kind_of(self.director.visual.current or "") not in ("video", "animation"):
+            return None
+        try:
+            if self.ipc.get("pause", False) or self.ipc.get("idle-active", True):
+                return None
+            duration = self.ipc.get("duration")
+            if not isinstance(duration, (int, float)) or duration < FREEZE_MIN_DURATION:
+                return None
+            pos = self.ipc.get("time-pos")
+        except PlayerError:
+            return None  # not answering: that's the health check's job
+        return float(pos) if isinstance(pos, (int, float)) else None
+
+    # --- graphics hangs -----------------------------------------------------
+
+    @property
+    def hang_file(self) -> Path:
+        return self.cfg.data_dir / "hang.json"
+
+    def skip_after_hang(self) -> None:
+        """After a hang reboot, leave out the file that was playing, unless the
+        user has changed the playlist since."""
+        record = _read_json(self.hang_file)
+        name, at = record.get("file"), record.get("at")
+        if not isinstance(name, str) or not isinstance(at, (int, float)):
+            return
+        try:
+            if self.cfg.state_file.stat().st_mtime > at:
+                return
+        except OSError:
+            pass
+        self.director.skip_visual(
+            name, f"{name} was skipped: the frame hung while playing it and restarted. "
+                  "It is probably too heavy for the Pi (see README, Preparing artwork).")
+
+    def handle_stuck(self) -> bool:
+        """Players are stuck in the kernel. True if the Pi should reboot now."""
+        name = self.director.showing()
+        log.error("mpv is stuck in the kernel (pid %s)%s. The graphics firmware has "
+                  "probably hung; only a reboot recovers.",
+                  ", ".join(map(str, self.stuck)), f" while playing {name}" if name else "")
+        self.stuck.clear()
+        record = _read_json(self.hang_file)
+        now = time.time()
+        # A clock that went backwards (no RTC, no network) still counts as recent.
+        recent = [t for t in record.get("reboots", [])
+                  if isinstance(t, (int, float)) and now - t < REBOOT_WINDOW]
+        if len(recent) >= MAX_REBOOTS:
+            log.error("not rebooting: already rebooted %d times in the last %d hours; "
+                      "retrying the player instead", len(recent), REBOOT_WINDOW // 3600)
+            return False
+        if not _write_json(self.hang_file, {"reboots": recent + [now], "file": name, "at": now}):
+            return False
+        log.error("rebooting to recover")
+        return True
 
     # --- display ------------------------------------------------------------
 
@@ -150,8 +237,8 @@ class Supervisor:
             log.info("stopping mpv (%s)", reason)
         for proc, sock in ((self.proc, self.cfg.mpv_socket),
                            (self.audio_proc, self.cfg.audio_socket)):
-            if proc is not None:
-                _stop_process(proc, sock)
+            if proc is not None and not _stop_process(proc, sock):
+                self.stuck.append(proc.pid)
 
     def write_status(self) -> None:
         running = bool(self.proc and self.proc.poll() is None)
@@ -187,6 +274,7 @@ class Supervisor:
         signal.signal(signal.SIGINT, self._on_signal)
         log.info("frame player starting (pid %d)", os.getpid())
 
+        self.skip_after_hang()
         has_sysfs, connector, connected = self._display_snapshot()
         while not self.stopping:
             # 1. Wait for a display if the system can tell us about displays.
@@ -213,6 +301,9 @@ class Supervisor:
             reason = self.watch(connected)
             if self.stopping:
                 break
+            if self.stuck and self.handle_stuck():
+                self.write_status()
+                return REBOOT_EXIT_CODE
             ran_for = time.monotonic() - self.started_at
             if reason == "display reconnected":
                 delay = MIN_BACKOFF
@@ -234,6 +325,8 @@ class Supervisor:
         """Block while mpv runs fine. Returns why it needs restarting (None if stopping)."""
         failures = 0
         last_check = time.monotonic()
+        last_freeze_check = 0.0
+        position, moved_at = None, time.monotonic()
         while not self.stopping:
             code = self.proc.poll()
             if code is not None:
@@ -265,8 +358,17 @@ class Supervisor:
 
             now = time.monotonic()
             display_present = not has_sysfs or bool(connected)
-            if (display_present and now - self.started_at >= STARTUP_GRACE
-                    and now - last_check >= HEALTH_EVERY):
+            if not display_present or now - self.started_at < STARTUP_GRACE:
+                position, moved_at = None, now
+                continue
+            if now - last_freeze_check >= FREEZE_CHECK_EVERY:
+                last_freeze_check = now
+                pos = self.playback_position()
+                if pos is None or pos != position:
+                    position, moved_at = pos, now
+                elif now - moved_at >= FREEZE_SECONDS:
+                    return self._frozen(now - moved_at)
+            if now - last_check >= HEALTH_EVERY:
                 last_check = now
                 problem = self.check_health()
                 if problem is None:
@@ -280,6 +382,17 @@ class Supervisor:
                     return f"unhealthy: {problem}"
         return None
 
+    def _frozen(self, seconds: float) -> str:
+        name = self.director.visual.current
+        log.warning("picture frozen for %.0fs while playing %s; restarting the players",
+                    seconds, name)
+        if name:
+            self.director.skip_visual(
+                name, f"{name} was skipped: its picture froze. It is probably too heavy "
+                      "for the Pi (see README, Preparing artwork).")
+        self.stop_mpv(f"picture frozen: {name}")
+        return f"picture frozen ({name})"
+
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + seconds
         while not self.stopping and time.monotonic() < end:
@@ -290,9 +403,10 @@ class Supervisor:
         self.stopping = True
 
 
-def _stop_process(proc: subprocess.Popen, sock) -> None:
+def _stop_process(proc: subprocess.Popen, sock) -> bool:
+    """Stop one mpv. False if it can't be stopped (stuck in the kernel)."""
     if proc.poll() is not None:
-        return
+        return True
     # Ask nicely via IPC first so mpv releases DRM and audio cleanly.
     try:
         MpvIpc(sock, timeout=1.0).command("quit")
@@ -300,10 +414,40 @@ def _stop_process(proc: subprocess.Popen, sock) -> None:
         proc.terminate()
     try:
         proc.wait(timeout=5)
+        return True
     except subprocess.TimeoutExpired:
         log.warning("mpv did not exit; killing it")
-        proc.kill()
-        proc.wait()
+    proc.kill()
+    # Never wait without a limit: a process blocked in a driver ignores even
+    # SIGKILL, and waiting for it would stop the supervisor for good.
+    try:
+        proc.wait(timeout=KILL_WAIT)
+        return True
+    except subprocess.TimeoutExpired:
+        log.error("mpv (pid %d) did not exit %.0fs after SIGKILL", proc.pid, KILL_WAIT)
+        return False
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(path: Path, data: dict) -> bool:
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())  # the Pi reboots right after this
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        log.error("could not write %s: %s", path, exc)
+        return False
 
 
 def main() -> int:

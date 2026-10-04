@@ -28,7 +28,7 @@ Two systemd services, both running as the unprivileged system user `frame`:
 
 | Service | Module | Role |
 |---|---|---|
-| `frame-player.service` | `frame/player_service.py` | Supervisor. Starts the artwork mpv and an audio-only "soundtrack" mpv with the saved state, and treats them as a pair: if either exits, hangs (IPC health check) or the artwork mpv has no video output (`vo-configured` false), both restart with backoff. Waits for an HDMI display and restarts both on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
+| `frame-player.service` | `frame/player_service.py` | Supervisor. Starts the artwork mpv and an audio-only "soundtrack" mpv with the saved state, and treats them as a pair: if either exits, hangs (IPC health check), the artwork mpv has no video output (`vo-configured` false) or a video's `time-pos` stops moving for 15 s while not paused (freeze watchdog), both restart with backoff. Waits for an HDMI display and restarts both on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
 | `frame-web.service` | `frame/web.py` (+ `controller.py`) | Flask app served by waitress on :8080. Server-rendered HTML + vanilla JS. Saves what to play in `state.json`; changes live settings (volume, pause, rotation...) over mpv JSON IPC. |
 
 Key rules:
@@ -56,6 +56,16 @@ Key rules:
   between kernels. Audio is ALSA, `alsa/hdmi:CARD=vc4hdmiN,DEV=0` for the connected port.
   The vc4 HDMI driver needs the IEC958 `hdmi:` PCM, not `hw:`.
 - `--audio-fallback-to-null=yes`: if HDMI audio fails, video keeps playing.
+- **Graphics hangs.** If the VideoCore firmware hangs (seen on a 1 GB Pi 4 running out of
+  memory while opening a 2880×1620 video), mpv blocks in the kernel and ignores even
+  SIGKILL. So the supervisor never waits without a limit for a process. When mpv can't be
+  stopped it records the file in `/var/lib/frame/hang.json` and exits with code 75, and
+  `ExecStopPost` in the unit reboots the Pi (at most 3 reboots in 6 hours, counted in
+  that file). After the reboot the file is skipped until the playlist is next edited.
+  The freeze watchdog skips a frozen file the same way, within the running session.
+- **Upload warnings** (`mediainfo.py`) read container headers in Python (MP4/MOV,
+  Matroska/WebM, GIF) to flag files a Pi 4 can't decode in hardware. No ffprobe, and no
+  extra mpv, because RAM is tight. They only advise; nothing is refused.
 - **Separate soundtracks** play in the second, audio-only mpv (`/run/frame/audio.sock`,
   `build_audio_args`), so a short GIF can loop over a long track. The vc4 HDMI PCM can
   only be opened once, so only one mpv may have audio: with a soundtrack the artwork mpv
@@ -88,6 +98,7 @@ Key rules:
 | `/opt/frame/scripts/doctor.sh` | diagnostics, symlinked to `/usr/local/bin/frame-doctor` |
 | `/var/lib/frame/media/` | artwork (never touched by install/upgrade) |
 | `/var/lib/frame/state.json` | persistent settings (see `state.DEFAULTS`) |
+| `/var/lib/frame/hang.json` | recent hang reboots and the file that was playing (written only by the player) |
 | `/var/lib/frame/tmp/` | waitress upload spool |
 | `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
 | `/run/frame/audio.sock` | soundtrack mpv IPC socket |
@@ -138,7 +149,8 @@ shellcheck on Python 3.11 and 3.13.
 
 On the Pi: `git clone` → `sudo ./scripts/install.sh` → `sudo reboot`. Upgrades:
 `git pull && sudo ./scripts/install.sh`. The installer is idempotent, never deletes media or
-state, and restarts running services. `doctor.sh` must stay read-only.
+state, and restarts running services. `doctor.sh` must stay read-only, and must never block on
+`vcgencmd`: it hangs forever when the graphics firmware has.
 
 ## Non-goals (for now)
 

@@ -61,7 +61,7 @@ def test_upload_list_and_no_autoplay(client, ipc, cfg):
     assert media == [
         {"name": "Sea_Waves.mp4", "kind": "video", "size": len(MP4),
          "mtime": media[0]["mtime"], "in_playlist": False, "in_sounds": False,
-         "playing": False}
+         "playing": False, "warning": None}
     ]
     assert list(cfg.incoming_dir.iterdir()) == []
 
@@ -417,3 +417,16 @@ def test_index_renders_playlists(client):
     html = client.get("/").get_data(as_text=True)
     assert 'id="playlist-items"' in html and 'id="sounds-items"' in html
     assert "Change every" in html and "Change track" in html
+
+
+def test_upload_warns_about_heavy_video(client, cfg):
+    from .test_mediainfo import mp4
+
+    res = post_file(client, "big.mp4", mp4(2880, 1620, level=50))
+    assert res.status_code == 201
+    assert "2880×1620" in res.get_json()["warning"]
+    media = {m["name"]: m for m in client.get("/api/media").get_json()["media"]}
+    assert "H.264 level 5.0" in media["big.mp4"]["warning"]
+    assert "May be too heavy" in client.get("/").get_data(as_text=True)
+    ok = post_file(client, "ok.mp4", mp4(1920, 1080, level=41))
+    assert "warning" not in ok.get_json()

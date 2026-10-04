@@ -24,15 +24,36 @@ kv "Hostname" "$(hostname)"
 kv "IP address(es)" "$(hostname -I 2>/dev/null || echo unknown)"
 kv "Uptime" "$(uptime -p 2>/dev/null || cat /proc/uptime)"
 kv "Memory" "$(free -m 2>/dev/null | awk '/^Mem:/ {print $3 " MB used / " $2 " MB total, " $7 " MB available"}')"
-if have vcgencmd; then
-  kv "Temperature" "$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2)"
-  THROTTLED="$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
-  kv "Throttled flags" "${THROTTLED:-unknown}"
-  if [[ -n "$THROTTLED" && "$THROTTLED" != "0x0" ]]; then
-    note "non-zero throttled flags: under-voltage or overheating happened (0x50000 = past under-voltage)."
-  fi
-elif [[ -r /sys/class/thermal/thermal_zone0/temp ]]; then
+# The SoC sensor, read directly: works even when the graphics firmware has hung.
+if [[ -r /sys/class/thermal/thermal_zone0/temp ]]; then
   kv "Temperature" "$(awk '{printf "%.1f°C", $1/1000}' /sys/class/thermal/thermal_zone0/temp)"
+fi
+if have vcgencmd; then
+  # vcgencmd asks the VideoCore firmware. If that has hung, vcgencmd blocks in
+  # the kernel forever and not even SIGKILL stops it, so don't wait for it:
+  # read its answer with a time limit and leave it behind if none comes.
+  THROTTLED=""
+  if IFS= read -r -t 3 THROTTLED < <(vcgencmd get_throttled 2>/dev/null); then
+    THROTTLED="${THROTTLED#*=}"
+    kv "Throttled flags" "${THROTTLED:-unknown}"
+    if [[ -n "$THROTTLED" && "$THROTTLED" != "0x0" ]]; then
+      note "non-zero throttled flags: under-voltage or overheating happened (0x50000 = past under-voltage)."
+    fi
+  else
+    bad "the graphics firmware is not answering (vcgencmd timed out). The picture is probably frozen; reboot: sudo reboot"
+  fi
+fi
+# Kernel log (needs sudo or group adm). Firmware timeouts mean the graphics hung;
+# out-of-memory kills mean the Pi ran short of RAM, often from too-heavy artwork.
+KLOG="$(journalctl -k -b --no-pager 2>/dev/null)"
+HANG="$(grep -E 'Firmware transaction .*timeout|mbox_send_message returned' <<<"$KLOG" | head -n1)"
+[[ -n "$HANG" ]] && bad "graphics firmware stopped responding this boot: ${HANG}"
+OOM="$(grep -c 'Out of memory: Killed process' <<<"$KLOG")"
+if [[ "$OOM" -gt 0 ]]; then
+  bad "the kernel ran out of memory $OOM time(s) this boot (last: $(grep 'Out of memory: Killed process' <<<"$KLOG" | tail -n1 | sed -E 's/.*Killed process [0-9]+ \(([^)]*)\).*/killed \1/'))"
+fi
+if [[ -r $DATA_DIR/hang.json ]]; then
+  kv "Last hang reboot" "$(cat "$DATA_DIR/hang.json")"
 fi
 
 h "Software"

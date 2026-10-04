@@ -240,7 +240,8 @@ $("#upload-form").addEventListener("submit", (e) => {
     bar.hidden = true;
     if (xhr.status >= 200 && xhr.status < 300) {
       toast(data.warning || `Uploaded ${data.saved.join(", ")}`, Boolean(data.warning));
-      setTimeout(() => location.reload(), 800);
+      // Leave a warning up long enough to read; the library shows it again after.
+      setTimeout(() => location.reload(), data.warning ? 6000 : 800);
     } else {
       toast(data.error || `Upload failed (${xhr.status})`, true);
     }

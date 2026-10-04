@@ -24,6 +24,10 @@ RestartSec=5
 # Stop mpv along with the supervisor.
 KillMode=control-group
 TimeoutStopSec=10
+# Exit code 75: mpv is stuck in the kernel because the graphics firmware hung,
+# and only a reboot recovers. The supervisor limits how often it asks for this
+# (see REBOOT_EXIT_CODE in player_service.py). "+" runs it as root, unsandboxed.
+ExecStopPost=+/bin/sh -c 'if [ "$$EXIT_STATUS" = 75 ]; then echo "frame-player: rebooting to recover from a graphics hang"; exec systemctl --no-block reboot; fi'
 # Smooth playback beats everything else on this box.
 Nice=-5
 

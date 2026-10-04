@@ -282,3 +282,18 @@ def test_fade_problems_never_stop_the_playlist(env):
     run(env, d, 31)
     assert loads(env) == ["b.mp4"]
     assert d.error is None
+
+
+def test_hang_while_loading_names_the_file_being_opened(env):
+    from frame.player import PlayerUnavailable
+
+    d, _, _ = start(env, playlist=["a.mp4", "b.mp4"], interval=30)
+
+    def hang(path, wait=6.0):
+        raise PlayerUnavailable("player did not answer in time")
+
+    env.video.load = hang
+    run(env, d, 31)
+    assert d.visual.current == "a.mp4" and d.showing() == "b.mp4"
+    d.initial()  # the supervisor restarts mpv
+    assert d.showing() == "a.mp4"

@@ -169,6 +169,12 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             log.info("uploaded %s (%d bytes)", name, (cfg.media_dir / name).stat().st_size)
             saved.append(name)
         result: dict[str, Any] = {"saved": saved}
+        heavy = []
+        for name in saved:
+            warning = ctl.heavy_warning(name) if kind_of(name) != "audio" else None
+            if warning:
+                log.warning("uploaded %s: %s", name, warning)
+                heavy.append(f"{name}: {warning}" if len(saved) > 1 else warning)
         if request.form.get("add") in ("1", "true", "on"):
             # Add to the playlist (visuals) or the sound list (audio).
             for name in saved:
@@ -179,6 +185,10 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
                 result.update(ctl.set_soundtrack(last))
             else:
                 result.update(ctl.play(last))
+        if heavy:
+            if "warning" in result:
+                heavy.append(result["warning"])
+            result["warning"] = " ".join(heavy)
         return jsonify(result), 201
 
     @app.delete("/api/media/<path:name>")

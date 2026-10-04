@@ -53,6 +53,8 @@ class Channel:
     # Seconds the current item stays; None = not known yet (waiting for mpv).
     length: float | None = None
     failed: set[str] = field(default_factory=set)
+    # Set while mpv is opening an item, so a hang during loading names the right file.
+    loading: str | None = None
 
     def playable(self) -> list[str]:
         return [n for n in self.items if n not in self.failed]
@@ -114,6 +116,7 @@ class Director:
                             (self.sound, self.state["sound_shuffle"])):
             if ch.current not in ch.playable():
                 ch.current = self._first(ch, shuffle)
+            ch.loading = None
             ch.restart_clock(self.clock())
         self._take_request(NEXT_VISUAL)
         self._take_request(NEXT_SOUND)
@@ -255,12 +258,14 @@ class Director:
 
     def _switch(self, ch: Channel, name: str | None, user_choice: bool = False) -> None:
         for _ in range(max(1, len(ch.items))):
+            ch.loading = name
             try:
                 if ch is self.visual:
                     self._switch_visual(name, user_choice)
                 else:
                     self._switch_sound(name)
             except InvalidMedia as exc:
+                ch.loading = None
                 self._note_error(f"cannot play {name}: {exc}")
                 ch.failed.add(name)
                 ch.current = name
@@ -269,6 +274,7 @@ class Director:
                     self._switch(ch, None)
                     return
                 continue
+            ch.loading = None
             ch.current = name
             ch.restart_clock(self.clock())
             self.changed = True
@@ -381,6 +387,28 @@ class Director:
             ipc.command(*args)
         except PlayerError:
             pass
+
+    # --- files that froze the frame ----------------------------------------------
+
+    def showing(self) -> str | None:
+        """The artwork on screen, or the one mpv is opening right now."""
+        return self.visual.loading or self.visual.current
+
+    def skip_visual(self, name: str, message: str) -> bool:
+        """Leave ``name`` out of the playlist until the user next changes it.
+
+        Used after ``name`` froze the picture or hung the graphics. Not done when
+        it's the only artwork: retrying it beats a black screen.
+        """
+        visuals, _ = self._wanted()
+        if name not in visuals or len(visuals) < 2:
+            return False
+        self.visual.items = visuals
+        self.visual.failed.add(name)
+        if self.visual.current == name:
+            self.visual.current = self._next(self.visual, False)
+        self._note_error(message)
+        return True
 
     def _note_error(self, message: str) -> None:
         self.error = message

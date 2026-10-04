@@ -266,3 +266,35 @@ def test_director_with_real_players(tmp_path):
         for proc in (vproc, aproc):
             proc.terminate()
             proc.wait(5)
+
+
+@pytest.mark.parametrize("name", ["v.mp4", "v.gif"])
+def test_position_moves_only_while_playing(mpv, name):
+    """What the freeze watchdog relies on: time-pos moves while playing (also with
+    the artwork's own sound off), and stops when paused."""
+    ipc, tmp = mpv
+    path = tmp / name
+    if name.endswith(".gif"):
+        ffmpeg("-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=2", str(path))
+    else:
+        make_clip(path)
+    ipc.load(path)
+    ipc.set("aid", "no")
+
+    def position():
+        for _ in range(40):
+            pos = ipc.get("time-pos")
+            if isinstance(pos, (int, float)):
+                return pos
+            time.sleep(0.05)
+        pytest.fail("no time-pos")
+
+    assert ipc.get("duration") >= 1.0
+    first = position()
+    time.sleep(0.6)
+    assert position() != first
+    ipc.set("pause", True)
+    time.sleep(0.2)
+    paused_at = position()
+    time.sleep(0.6)
+    assert position() == paused_at

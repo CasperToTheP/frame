@@ -51,6 +51,11 @@ crashes, keeps playing when Wi-Fi drops, and needs no internet once the artwork 
   artwork, volume and rotation. If mpv exits, hangs or can't open the display, it is
   restarted with exponential backoff (1 s up to 60 s). The player also waits for a display
   to be connected, and restarts mpv when the HDMI cable or monitor is reconnected.
+  A **freeze watchdog** restarts both players if a video's picture stops moving for 15 s
+  while it isn't paused. If mpv gets stuck in the kernel because the Pi's graphics
+  firmware has hung, the Pi **reboots itself** (at most 3 times in 6 hours). In both
+  cases the file that was playing is logged and left out of the playlist until you next
+  change the playlist (unless it's the only artwork).
 - **frame-web.service** serves the UI and the JSON API. It changes playback live through
   mpv's IPC socket, so mpv is never restarted just to switch artwork. Every change is saved
   to `state.json` first, so it survives reboots and player restarts.
@@ -152,6 +157,11 @@ uploads. With **Add to playlist / sound** ticked (the default), visuals are adde
 end of the playlist and audio files to the sound list. See
 [Supported files](#supported-files). The default size limit is 4 GB, and an upload is
 refused if it would leave less than 256 MB free on the SD card.
+
+Files that are likely too heavy for a Pi 4 are accepted, but marked with a ⚠ warning in
+**Library** saying why: larger than 1920×1080, H.264 above level 4.2, 10-bit or 4:2:2
+video, AV1 or VP9, or a GIF over 50 MB. Convert them as described in
+[Preparing artwork](#preparing-artwork).
 
 ### Playlist
 The **Playlist** is the artwork the frame shows, in order. Everything is saved and
@@ -277,8 +287,9 @@ The Raspberry Pi 4 decodes **H.264** in hardware up to 1080p60. Use:
 | Audio | AAC, stereo, 48 kHz, 128–192 kbit/s |
 
 Avoid HEVC/H.265 above 1080p, 10-bit video, 4K, and AV1. They play badly or not at all on a
-Pi 4. Frame doesn't transcode for you; convert artwork on your computer with
-[ffmpeg](https://ffmpeg.org/).
+Pi 4: they're decoded in software with large buffers, which can freeze the picture or run
+the 1 GB Pi out of memory. The web UI warns about such files. Frame doesn't transcode for
+you; convert artwork on your computer with [ffmpeg](https://ffmpeg.org/).
 
 ### Convert anything to a frame-friendly MP4
 
@@ -378,7 +389,7 @@ sudo frame-doctor            # or: sudo ./scripts/doctor.sh from the repo
 
 It shows the Pi model, OS, mpv version, connected displays, audio devices, service states,
 player IPC health and the current state, disk space, IP addresses, temperature,
-under-voltage flags and recent errors.
+under-voltage flags, graphics firmware hangs, out-of-memory kills and recent errors.
 
 ### Logs
 ```bash
@@ -402,6 +413,20 @@ journalctl -u frame-web --since "10 min ago"
 - Stutter or a black picture with sound: try **Display → Advanced → Hardware decoding**
   set to `drm` or `v4l2m2m-copy`, or `no` to rule decoding out. Re-encode the file with the
   recommended settings above.
+
+### Picture frozen, sound still playing
+The player restarts itself after 15 s of frozen picture, and reboots the Pi if the
+graphics firmware has hung, so this should clear up within about a minute. To find out
+which file caused it:
+
+```bash
+journalctl -u frame-player -b -1 | grep -E "frozen|stuck|rebooting"   # -b -1: the boot before
+sudo cat /var/lib/frame/hang.json
+```
+
+Almost always the file is too heavy for the Pi (see the ⚠ in **Library**). Convert it with
+the command in [Preparing artwork](#preparing-artwork). If it keeps happening,
+`frame-doctor` shows whether the kernel ran out of memory.
 
 ### No HDMI sound
 - Check the monitor's own volume and that it isn't muted. Many portable monitors start at
