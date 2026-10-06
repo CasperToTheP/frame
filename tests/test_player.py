@@ -123,6 +123,8 @@ def test_no_reply_is_unavailable():
 
 def test_load_waits_for_file_loaded():
     def handler(req):
+        if req["command"] == ["get_property", "path"]:
+            return [ok(req, str(Path("/var/lib/frame/media/a.mp4")))]
         return [
             ok(req),
             {"event": "end-file", "reason": "stop"},  # the previous file ending
@@ -147,6 +149,39 @@ def test_load_reports_invalid_media():
     ipc, _ = make_ipc(handler)
     with pytest.raises(InvalidMedia, match="unrecognized"):
         ipc.load(Path("bad.mp4"))
+
+
+def test_load_ignores_events_of_the_file_loading_before():
+    """Right after mpv starts, its first file may finish loading after our
+    loadfile was sent. Its events must not count as ours."""
+    target = Path("/m/b.mp4")
+
+    def handler(req):
+        if req["command"] == ["get_property", "path"]:
+            return [ok(req, handler.path)]
+        handler.path = "/m/a.mp4"
+        return [
+            ok(req),
+            {"event": "file-loaded"},  # a.mp4, which was still loading
+            {"event": "end-file", "reason": "error", "playlist_entry_id": 1,
+             "file_error": "old file"},
+            {"event": "start-file", "playlist_entry_id": 2},
+        ]
+
+    ipc, socks = make_ipc(handler)
+    ipc.load(target, wait=0.2)  # neither event counts: no error, and it waits it out
+    assert len([s for s in socks if s.sent[0]["command"][0] == "get_property"]) == 1
+
+    def ours(req):
+        if req["command"] == ["get_property", "path"]:
+            return [ok(req, str(target))]
+        return [ok(req), {"event": "start-file", "playlist_entry_id": 2},
+                {"event": "end-file", "reason": "error", "playlist_entry_id": 2,
+                 "file_error": "bad data"}]
+
+    ipc, _ = make_ipc(ours)
+    with pytest.raises(InvalidMedia, match="bad data"):
+        ipc.load(target)
 
 
 def test_load_without_confirmation_assumes_ok():

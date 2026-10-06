@@ -310,18 +310,35 @@ class MpvIpc:
         try:
             conn.request(["loadfile", str(path), "replace"], next(self._ids))
             deadline = time.monotonic() + wait
+            # Events for the file that was loading before (e.g. right after mpv
+            # started) can still arrive on this connection. Only trust an error
+            # for an entry that started after our command, and confirm a
+            # "file-loaded" by checking that mpv's path is really ours.
+            ours = None
             while time.monotonic() < deadline:
                 msg = conn.read_message(deadline)
                 if msg is None:
                     break
                 event = msg.get("event")
-                if event == "file-loaded":
-                    return
-                if event == "end-file" and msg.get("reason") == "error":
-                    raise InvalidMedia(msg.get("file_error") or "mpv could not open the file")
+                if event == "start-file":
+                    ours = msg.get("playlist_entry_id", ours)
+                elif event == "file-loaded":
+                    if self._is_playing(path):
+                        return
+                elif event == "end-file" and msg.get("reason") == "error":
+                    entry = msg.get("playlist_entry_id")
+                    if entry is None or entry == ours:
+                        raise InvalidMedia(msg.get("file_error") or "mpv could not open the file")
             log.warning("no load confirmation from mpv for %s; assuming ok", path)
         finally:
             conn.close()
+
+    def _is_playing(self, path: Path) -> bool:
+        try:
+            current = self.get("path")
+        except PlayerError:
+            return True  # can't tell; don't wait for nothing
+        return current == str(path)
 
 
 class _Conn:
