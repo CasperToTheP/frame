@@ -298,3 +298,24 @@ def test_position_moves_only_while_playing(mpv, name):
     paused_at = position()
     time.sleep(0.6)
     assert position() == paused_at
+
+
+def test_audio_output_can_be_reopened_while_playing(audio_mpv):
+    """What the supervisor does when HDMI audio failed at start: ao-reload."""
+    ipc, tmp = audio_mpv
+    song = tmp / "song.mp3"
+    ffmpeg("-f", "lavfi", "-i", "sine=duration=5", str(song))
+    ipc.load(song)
+
+    def audio_output():
+        # The output opens shortly after the file does (and again after a reload).
+        for _ in range(60):
+            ao = ipc.get("current-ao")
+            if ao is not None:
+                return ao
+            time.sleep(0.05)
+        return None
+
+    assert audio_output() == "null"  # the headless tests use --ao=null
+    ipc.command("ao-reload")
+    assert audio_output() == "null" and ipc.get("idle-active") is False

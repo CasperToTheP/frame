@@ -416,8 +416,11 @@ under-voltage flags, graphics firmware hangs, out-of-memory kills and recent err
 ```bash
 journalctl -u frame-player -u frame-web -f          # follow live
 journalctl -u frame-player -b                       # player, since boot
+journalctl -u frame-player -b -1                    # player, the boot before
 journalctl -u frame-web --since "10 min ago"
 ```
+The installer keeps logs across reboots (Raspberry Pi OS keeps them in RAM only), capped
+at 32 MB.
 
 ### No picture
 - Is the monitor on and set to the HDMI input? `frame-doctor` should show
@@ -462,6 +465,10 @@ the command in [Preparing artwork](#preparing-artwork). If it keeps happening,
   `sudo systemctl start frame-player`.
 - If the file has no audio track (e.g. a GIF), there's nothing to play. Choose an audio
   file under **Sound** instead.
+- If HDMI audio isn't ready when a file starts (e.g. the monitor is still waking up), mpv
+  plays on without sound. The player notices (`no audio output` in the log) and reopens
+  the audio output in the background after 30 s, then less often, without interrupting
+  the picture.
 - If a separate **Sound** is chosen, the artwork's own sound is off on purpose. `frame-doctor`
   shows both players (artwork and soundtrack) and which one has the audio output open.
 

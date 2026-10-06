@@ -21,7 +21,8 @@ systemctl daemon-reload
 nmcli connection delete frame-hotspot >/dev/null 2>&1 || true
 
 rm -f /etc/tmpfiles.d/frame.conf /etc/avahi/services/frame.service \
-  /etc/NetworkManager/conf.d/frame-wifi-powersave.conf
+  /etc/NetworkManager/conf.d/frame-wifi-powersave.conf \
+  /etc/systemd/journald.conf.d/90-frame.conf
 rm -rf /run/frame
 rm -f /usr/local/bin/frame-doctor
 rm -rf /opt/frame

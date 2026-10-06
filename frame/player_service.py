@@ -61,6 +61,12 @@ FREEZE_SECONDS = 15.0
 FREEZE_CHECK_EVERY = 2.5
 # Shorter files are left alone: a one-frame "video" never moves.
 FREEZE_MIN_DURATION = 1.0
+# mpv falls back to no sound (current-ao "null") if HDMI audio can't be opened when
+# a file starts, e.g. while the monitor is still waking up, and never tries again by
+# itself. Retry with "ao-reload" (no restart, the picture keeps playing), first
+# after this long, then less and less often.
+AUDIO_RETRY_MIN = 30.0
+AUDIO_RETRY_MAX = 600.0
 # After SIGKILL, a process that still hasn't exited is stuck in the kernel.
 KILL_WAIT = 20.0
 # Exit code that asks systemd to reboot (ExecStopPost in frame-player.service).
@@ -93,6 +99,9 @@ class Supervisor:
         self._waiting_logged = False
         # PIDs of players that could not be stopped (stuck in the kernel).
         self.stuck: list[int] = []
+        self._audio_missing_since: float | None = None
+        self._audio_retry_at = 0.0
+        self._audio_retry_every = AUDIO_RETRY_MIN
         self.ipc = MpvIpc(cfg.mpv_socket, timeout=3.0)
         self.audio_ipc = MpvIpc(cfg.audio_socket, timeout=3.0)
         self.director = Director(cfg, self.ipc, self.audio_ipc, sleep=self._sleep)
@@ -125,6 +134,41 @@ class Supervisor:
         except PlayerError:
             return None  # not answering: that's the health check's job
         return float(pos) if isinstance(pos, (int, float)) else None
+
+    def check_audio(self, now: float) -> None:
+        """Reopen HDMI audio in a player that fell back to no sound.
+
+        A player without audio to play reports no audio output at all (None),
+        so only one that should be playing sound reports "null".
+        """
+        silent = []
+        for ipc in (self.ipc, self.audio_ipc):
+            try:
+                if ipc.get("current-ao") == "null":
+                    silent.append(ipc)
+            except PlayerError:
+                pass  # not answering: that's the health check's job
+        if not silent:
+            if self._audio_missing_since is not None:
+                log.info("audio output is back after %.0fs", now - self._audio_missing_since)
+            self._audio_missing_since = None
+            self._audio_retry_every = AUDIO_RETRY_MIN
+            return
+        if self._audio_missing_since is None:
+            log.warning("no audio output (HDMI audio could not be opened); retrying "
+                        "in the background")
+            self._audio_missing_since = now
+            self._audio_retry_at = now + self._audio_retry_every
+            return
+        if now < self._audio_retry_at:
+            return
+        for ipc in silent:
+            try:
+                ipc.command("ao-reload")
+            except PlayerError as exc:
+                log.debug("ao-reload failed: %s", exc)
+        self._audio_retry_every = min(AUDIO_RETRY_MAX, self._audio_retry_every * 2)
+        self._audio_retry_at = now + self._audio_retry_every
 
     # --- graphics hangs -----------------------------------------------------
 
@@ -370,6 +414,7 @@ class Supervisor:
                     return self._frozen(now - moved_at)
             if now - last_check >= HEALTH_EVERY:
                 last_check = now
+                self.check_audio(now)
                 problem = self.check_health()
                 if problem is None:
                     failures = 0

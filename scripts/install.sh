@@ -145,6 +145,24 @@ fi
 # It holds the hotspot password. systemd reads it as root.
 chmod 0600 /etc/default/frame
 
+# --- logs ---------------------------------------------------------------------
+# Raspberry Pi OS keeps the journal in RAM only, so whatever happened before a
+# reboot or power cut is lost. Keep it on the SD card, capped (journald batches
+# its writes).
+step "Keeping logs across reboots (at most 32 MB)"
+install -d /etc/systemd/journald.conf.d /var/log/journal
+cat >/etc/systemd/journald.conf.d/90-frame.conf <<'EOF'
+# Added by Frame installer: keep logs across reboots (overrides
+# 40-rpi-volatile-storage.conf), so problems before a restart can be diagnosed.
+[Journal]
+Storage=persistent
+SystemMaxUse=32M
+EOF
+systemd-tmpfiles --create --prefix /var/log/journal >/dev/null 2>&1 || true
+systemctl restart systemd-journald
+journalctl --flush >/dev/null 2>&1 || true
+info "logs: journalctl -b -1 shows the boot before the last one"
+
 # --- systemd ------------------------------------------------------------------
 step "Installing systemd services"
 install -m 0644 "$REPO_DIR/systemd/frame-player.service" /etc/systemd/system/

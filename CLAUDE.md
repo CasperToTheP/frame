@@ -57,7 +57,10 @@ Key rules:
   `--drm-connector` taken from `/sys/class/drm`, because card0 vs card1 numbering differs
   between kernels. Audio is ALSA, `alsa/hdmi:CARD=vc4hdmiN,DEV=0` for the connected port.
   The vc4 HDMI driver needs the IEC958 `hdmi:` PCM, not `hw:`.
-- `--audio-fallback-to-null=yes`: if HDMI audio fails, video keeps playing.
+- `--audio-fallback-to-null=yes`: if HDMI audio fails, video keeps playing. mpv never
+  retries by itself, so the supervisor checks `current-ao` and sends `ao-reload` to a
+  player stuck on `"null"` (after 30 s, backing off to 10 min). This doesn't interrupt
+  the picture.
 - **Graphics hangs.** If the VideoCore firmware hangs (seen on a 1 GB Pi 4 running out of
   memory while opening a 2880×1620 video), mpv blocks in the kernel and ignores even
   SIGKILL. So the supervisor never waits without a limit for a process. When mpv can't be
@@ -110,7 +113,9 @@ Key rules:
 | `/etc/default/frame` | env overrides (`FRAME_*`, see `config.py`), incl. the generated hotspot password; mode 0600 |
 | `/etc/systemd/system/frame-*.service` | units (source in `systemd/`) |
 
-Logs go to journald only: `journalctl -u frame-player -u frame-web`.
+Logs go to journald only: `journalctl -u frame-player -u frame-web`. The installer makes
+the journal persistent (`/etc/systemd/journald.conf.d/90-frame.conf`, 32 MB cap), because
+Raspberry Pi OS keeps it in RAM and the cause of a problem before a reboot is otherwise lost.
 
 ## Development principles
 

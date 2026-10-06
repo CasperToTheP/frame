@@ -347,3 +347,51 @@ def test_moving_picture_is_left_alone(cfg, monkeypatch):
 
     sup._sleep = step
     assert sup.watch(frozenset()) is None and stopped == []
+
+
+# --- audio that fell back to no sound -----------------------------------------------
+
+
+def test_lost_audio_is_reopened_with_backoff(cfg, caplog):
+    from .conftest import FakeIpc
+
+    sup = Supervisor(cfg)
+    sup.ipc, sup.audio_ipc = FakeIpc(), FakeIpc()
+    sup.ipc.props["current-ao"] = None  # artwork: sound off (a soundtrack plays)
+    sup.audio_ipc.props["current-ao"] = "null"  # HDMI audio failed at start
+
+    def reloads():
+        return sum(1 for c in sup.audio_ipc.calls if c == ("command", "ao-reload"))
+
+    caplog.set_level("INFO")
+    sup.check_audio(0)
+    assert reloads() == 0 and "no audio output" in caplog.text  # give the monitor time
+    sup.check_audio(29)
+    assert reloads() == 0
+    sup.check_audio(31)
+    assert reloads() == 1
+    sup.check_audio(31 + 59)
+    assert reloads() == 1  # next try after 60 s
+    sup.check_audio(31 + 61)
+    assert reloads() == 2
+    for t in range(100, 20000, 10):
+        sup.check_audio(t)
+    assert reloads() < 40  # backs off to every 10 minutes
+    assert not any(c == ("command", "ao-reload") for c in sup.ipc.calls)
+
+    sup.audio_ipc.props["current-ao"] = "alsa"
+    sup.check_audio(20000)
+    assert "audio output is back" in caplog.text
+    assert sup._audio_retry_every == player_service.AUDIO_RETRY_MIN
+
+
+def test_players_without_sound_are_left_alone(cfg):
+    from .conftest import FakeIpc
+
+    sup = Supervisor(cfg)
+    sup.ipc, sup.audio_ipc = FakeIpc(), FakeIpc()
+    sup.ipc.props["current-ao"] = "alsa"
+    sup.audio_ipc.available = False  # not answering: the health check deals with it
+    for t in range(0, 3600, 10):
+        sup.check_audio(t)
+    assert sup._audio_missing_since is None
