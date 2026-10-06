@@ -28,6 +28,8 @@ from .player import (
     PlayerError,
     PlayerUnavailable,
     fit_properties,
+    hwdec_arg,
+    parse_mpv_version,
     scale_filter,
 )
 from .state import StateStore
@@ -258,7 +260,11 @@ class Controller:
         if "scaling" in changes:
             self._quiet_set("scale", scale_filter(state["scaling"]))
         if "hwdec" in changes:
-            self._quiet_set("hwdec", state["hwdec"])
+            try:
+                version = parse_mpv_version(self.ipc.get("mpv-version"))
+            except PlayerError:
+                version = None  # mpv is down: it starts with the saved setting
+            self._quiet_set("hwdec", hwdec_arg(state["hwdec"], version))
         if "audio_device" in changes:
             device = state["audio_device"]
             if device == "auto":

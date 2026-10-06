@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 
 from frame.media import rasterize_svg
-from frame.player import InvalidMedia, MpvIpc, build_audio_args, build_mpv_args, mpv_version
+from frame.player import (
+    InvalidMedia,
+    MpvIpc,
+    build_audio_args,
+    build_mpv_args,
+    hwdec_arg,
+    mpv_version,
+)
 from frame.state import DEFAULTS
 
 pytestmark = pytest.mark.skipif(
@@ -112,7 +119,8 @@ def test_loadfile_pause_volume_and_live_settings(mpv):
     ipc.set("mute", True)
     assert ipc.get("mute") is True
     for prop, value in [("video-rotate", 270), ("keepaspect", False), ("panscan", 1.0),
-                        ("hwdec", "auto-safe"), ("audio-device", "auto")]:
+                        ("hwdec", hwdec_arg("auto", mpv_version("mpv"))),
+                        ("audio-device", "auto")]:
         ipc.set(prop, value)
     assert ipc.get("video-rotate") == 270
 

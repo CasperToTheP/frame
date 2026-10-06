@@ -50,8 +50,8 @@ DEFAULTS: dict[str, Any] = {
     # "auto" = pick the HDMI port the display is connected to. Otherwise an mpv
     # audio device name such as "alsa/hdmi:CARD=vc4hdmi0,DEV=0".
     "audio_device": "auto",
-    # mpv --hwdec value. "auto-safe" works on Pi 4; see README for alternatives.
-    "hwdec": "auto-safe",
+    # mpv --hwdec value, or "auto": Frame's choice for the Pi 4 (player.hwdec_arg).
+    "hwdec": "auto",
 }
 
 

@@ -175,8 +175,9 @@
       </label>
       <label>Hardware decoding
         <select data-setting="hwdec">
-          {% for h in ['auto-safe', 'drm', 'v4l2m2m-copy', 'no'] %}<option value="{{ h }}" {{ 'selected' if h == status.hwdec else '' }}>{{ h }}</option>{% endfor %}
-          {% if status.hwdec not in ['auto-safe', 'drm', 'v4l2m2m-copy', 'no'] %}<option selected>{{ status.hwdec }}</option>{% endif %}
+          {% set modes = ['auto', 'auto-safe', 'v4l2m2m-copy', 'drm', 'no'] %}
+          {% for h in modes %}<option value="{{ h }}" {{ 'selected' if h == status.hwdec else '' }}>{{ 'Automatic (recommended)' if h == 'auto' else h }}</option>{% endfor %}
+          {% if status.hwdec not in modes %}<option selected>{{ status.hwdec }}</option>{% endif %}
         </select>
       </label>
       <p class="hint" id="diag">

@@ -273,7 +273,7 @@ The UI uses a small JSON API that you can also script against:
 | `POST /api/pause` / `POST /api/resume` | | pause / resume |
 | `POST /api/volume` | `{"volume": 60}` | volume 0–100 |
 | `POST /api/mute` | `{"muted": true}` or `{}` to toggle | mute |
-| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "scaling": "sharp", "fade": 1, "audio_device": "auto", "hwdec": "auto-safe"}` | display/audio settings (`fade` in seconds, `0` = off) |
+| `POST /api/settings` | `{"rotation": 90, "fit": "fill", "scaling": "sharp", "fade": 1, "audio_device": "auto", "hwdec": "auto"}` | display/audio settings (`fade` in seconds, `0` = off) |
 | `GET /api/audio-devices` | | audio outputs mpv can see |
 
 Example: `curl -X POST -H 'Content-Type: application/json' -d '{"volume":40}' http://frame.local:8080/api/volume`
@@ -434,8 +434,10 @@ at 32 MB.
   player restarts mpv on a hotplug. If your monitor never signals hotplug, add
   `video=HDMI-A-1:1920x1080@60D` to the single line in `/boot/firmware/cmdline.txt` and
   reboot. That forces the output on.
-- Stutter or a black picture with sound: try **Display → Advanced → Hardware decoding**
-  set to `drm` or `v4l2m2m-copy`, or `no` to rule decoding out. Re-encode the file with the
+- Stutter or a black picture with sound: check **Display → Advanced → Decoder**. With
+  **Hardware decoding** on *Automatic*, H.264 up to 1080p shows `v4l2m2m-copy`; `no`
+  means software decoding, which takes most of the Pi's CPU (files above 1080p always
+  end up there). Try `no` to rule hardware decoding out. Re-encode the file with the
   recommended settings above.
 
 ### Picture frozen, sound still playing

@@ -15,7 +15,9 @@ from frame.player import (
     build_audio_args,
     build_mpv_args,
     fit_properties,
+    hwdec_arg,
     mpv_version,
+    parse_mpv_version,
 )
 from frame.state import DEFAULTS
 
@@ -168,7 +170,7 @@ def test_mpv_args_defaults():
         "--no-osc", "--osd-level=0", "--cursor-autohide=always", "--loop-file=inf",
         "--no-config", "--input-terminal=no", "--audio-fallback-to-null=yes",
         "--volume=33", "--mute=yes", "--video-rotate=270", "--keepaspect=yes",
-        "--hwdec=auto-safe", "--drm-device=/dev/dri/card1", "--drm-connector=HDMI-A-1",
+        "--hwdec=v4l2m2m-copy", "--drm-device=/dev/dri/card1", "--drm-connector=HDMI-A-1",
         "--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0",
     ]:
         assert flag in args, flag
@@ -305,3 +307,24 @@ def test_real_unix_socket_roundtrip(tmp_path):
     finally:
         t.join(2)
         server.close()
+
+
+@pytest.mark.parametrize("setting, version, expected", [
+    ("auto", (0, 40), "v4l2m2m-copy,auto-safe"),  # Trixie: H.264 and HEVC in hardware
+    ("auto", (0, 35), "v4l2m2m-copy"),  # Bookworm: no lists
+    ("auto", None, "v4l2m2m-copy"),
+    (None, (0, 40), "v4l2m2m-copy,auto-safe"),
+    ("auto-safe", (0, 40), "auto-safe"),  # an explicit choice is kept
+    ("no", (0, 35), "no"),
+])
+def test_hwdec_arg(setting, version, expected):
+    assert hwdec_arg(setting, version) == expected
+    args = build_mpv_args("mpv", Path("s"), {**DEFAULTS, "hwdec": setting}, None,
+                          mpv_version=version)
+    assert f"--hwdec={expected}" in args
+
+
+def test_parse_mpv_version():
+    assert parse_mpv_version("mpv v0.40.0-dirty Copyright") == (0, 40)
+    assert parse_mpv_version("mpv 0.35.1") == (0, 35)
+    assert parse_mpv_version(None) is None and parse_mpv_version("nope") is None

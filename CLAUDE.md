@@ -57,6 +57,10 @@ Key rules:
   `--drm-connector` taken from `/sys/class/drm`, because card0 vs card1 numbering differs
   between kernels. Audio is ALSA, `alsa/hdmi:CARD=vc4hdmiN,DEV=0` for the connected port.
   The vc4 HDMI driver needs the IEC958 `hdmi:` PCM, not `hw:`.
+- **Hardware decoding.** The `hwdec` setting defaults to `"auto"`, which `hwdec_arg()`
+  turns into `v4l2m2m-copy,auto-safe` (mpv ≥ 0.38) or `v4l2m2m-copy` (0.35 ignores a
+  list). mpv's `auto-safe` alone skips the Pi 4's V4L2 H.264 decoder; measured on the
+  Pi, software decoding took 220-320% CPU for a 1080p H.264 file, against ~40% in hardware.
 - `--audio-fallback-to-null=yes`: if HDMI audio fails, video keeps playing. mpv never
   retries by itself, so the supervisor checks `current-ao` and sends `ao-reload` to a
   player stuck on `"null"` (after 30 s, backing off to 10 min). This doesn't interrupt

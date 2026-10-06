@@ -446,3 +446,10 @@ def test_network_and_hotspot_shown(cfg, ipc, audio_ipc):
                    "hotspot_password": "abc23def45"}
     page = client.get("/").get_data(as_text=True)
     assert "Wi-Fi “Home”" in page and "abc23def45" in page and "10.42.0.1" in page
+
+
+def test_auto_hwdec_is_translated_for_the_running_mpv(client, ipc):
+    ipc.props["mpv-version"] = "mpv v0.40.0"
+    res = client.post("/api/settings", json={"hwdec": "auto"})
+    assert res.get_json()["hwdec"] == "auto"
+    assert ("set", "hwdec", "v4l2m2m-copy,auto-safe") in ipc.calls

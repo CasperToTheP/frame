@@ -59,8 +59,30 @@ def mpv_version(mpv_bin: str) -> tuple[int, int] | None:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
-    m = re.search(r"mpv v?(\d+)\.(\d+)", out)
+    return parse_mpv_version(out)
+
+
+def parse_mpv_version(text: Any) -> tuple[int, int] | None:
+    """(major, minor) from "mpv v0.40.0 ..." or mpv's ``mpv-version`` property."""
+    m = re.search(r"mpv v?(\d+)\.(\d+)", text) if isinstance(text, str) else None
     return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def hwdec_arg(setting: str | None, version: tuple[int, int] | None) -> str:
+    """mpv's --hwdec value for the saved setting.
+
+    "auto" is Frame's default. mpv's own "auto-safe" skips the Pi 4's H.264
+    decoder (V4L2), so H.264 was decoded in software: 2-3 of the 4 CPU cores for
+    a 1080p video, against about half a core with ``v4l2m2m-copy``. HEVC needs
+    the DRM decoder, which "auto-safe" does pick. mpv 0.40 (Trixie) takes a list
+    and tries them in order; 0.35 (Bookworm) ignores a list, so it gets the H.264
+    decoder only. Files the hardware can't do (above 1080p) fall back to software.
+    """
+    if setting and setting != "auto":
+        return setting
+    if version is not None and version >= (0, 38):
+        return "v4l2m2m-copy,auto-safe"
+    return "v4l2m2m-copy"
 
 
 def alpha_args(version: tuple[int, int] | None) -> list[str]:
@@ -106,7 +128,7 @@ def build_mpv_args(
         # Output straight to the display via DRM/KMS: no X11/Wayland desktop needed.
         "--vo=gpu",
         "--gpu-context=drm",
-        f"--hwdec={state.get('hwdec') or 'auto-safe'}",
+        f"--hwdec={hwdec_arg(state.get('hwdec'), mpv_version)}",
         "--fullscreen",
         "--idle=yes",
         "--force-window=yes",  # draw a black screen while idle
