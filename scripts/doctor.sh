@@ -95,7 +95,7 @@ if have mpv; then
 fi
 
 h "Services"
-for svc in frame-player frame-web avahi-daemon; do
+for svc in frame-player frame-web frame-netwatch avahi-daemon; do
   active="$(systemctl is-active "$svc" 2>/dev/null)"
   enabled="$(systemctl is-enabled "$svc" 2>/dev/null)"
   if [[ "$active" == active ]]; then ok "$svc: $active, $enabled"; else bad "$svc: $active, $enabled"; fi
@@ -153,6 +153,28 @@ fi
 kv "Disk" "$(df -h "$DATA_DIR" 2>/dev/null | awk 'NR==2 {print $4 " free of " $2 " (" $5 " used)"}')"
 
 h "Network"
+if [[ -r /run/frame/network.json ]]; then
+  kv "Mode" "$(cat /run/frame/network.json)"
+fi
+if have nmcli; then
+  # SSID last: it may contain (escaped) colons.
+  WIFI_NOW="$(nmcli -t -f IN-USE,SIGNAL,CHAN,SSID device wifi list --rescan no 2>/dev/null | grep '^\*' | head -n1)"
+  if [[ -n "$WIFI_NOW" ]]; then
+    IFS=: read -r _ W_SIGNAL W_CHAN W_SSID <<<"$WIFI_NOW"
+    kv "Wi-Fi" "${W_SSID//\\:/:}, signal $W_SIGNAL% (channel $W_CHAN)"
+    if [[ "$W_SIGNAL" =~ ^[0-9]+$ && "$W_SIGNAL" -lt 40 ]]; then
+      note "weak Wi-Fi signal: move the Pi or router, or use a USB Wi-Fi adapter with an antenna"
+    fi
+  fi
+  if nmcli -t -f NAME connection show 2>/dev/null | grep -qx frame-hotspot; then
+    ok "fallback hotspot configured (starts when the home Wi-Fi is out of reach)"
+  else
+    note "no fallback hotspot configured (re-run the installer)"
+  fi
+fi
+if [[ -r /etc/default/frame ]]; then
+  kv "Hotspot" "$(. /etc/default/frame; echo "${FRAME_HOTSPOT_SSID:-Frame} / password ${FRAME_HOTSPOT_PASSWORD:-?} / http://10.42.0.1:8080")"
+fi
 kv "Web UI" "http://$(hostname).local:8080"
 for ip in $(hostname -I 2>/dev/null); do
   [[ "$ip" == *:* ]] && continue

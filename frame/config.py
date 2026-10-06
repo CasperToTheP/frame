@@ -25,6 +25,10 @@ class Config:
     mpv_bin: str = "mpv"
     sys_drm: Path = Path("/sys/class/drm")
     proc_asound: Path = Path("/proc/asound")
+    # The frame's own Wi-Fi network, used when the home Wi-Fi can't be reached
+    # (see netwatch.py). The installer generates the password.
+    hotspot_ssid: str = "Frame"
+    hotspot_password: str = ""
 
     @property
     def media_dir(self) -> Path:
@@ -52,6 +56,10 @@ class Config:
     def player_status_file(self) -> Path:
         return self.run_dir / "player.json"
 
+    @property
+    def network_status_file(self) -> Path:
+        return self.run_dir / "network.json"
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
         env = os.environ if env is None else env
@@ -66,6 +74,8 @@ class Config:
             mpv_bin=env.get("FRAME_MPV_BIN", d.mpv_bin),
             sys_drm=Path(env.get("FRAME_SYS_DRM", d.sys_drm)),
             proc_asound=Path(env.get("FRAME_PROC_ASOUND", d.proc_asound)),
+            hotspot_ssid=env.get("FRAME_HOTSPOT_SSID", d.hotspot_ssid),
+            hotspot_password=env.get("FRAME_HOTSPOT_PASSWORD", d.hotspot_password),
         )
 
 

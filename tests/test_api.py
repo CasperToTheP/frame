@@ -430,3 +430,19 @@ def test_upload_warns_about_heavy_video(client, cfg):
     assert "May be too heavy" in client.get("/").get_data(as_text=True)
     ok = post_file(client, "ok.mp4", mp4(1920, 1080, level=41))
     assert "warning" not in ok.get_json()
+
+
+def test_network_and_hotspot_shown(cfg, ipc, audio_ipc):
+    import dataclasses
+
+    from frame.netwatch import write_status
+
+    cfg = dataclasses.replace(cfg, hotspot_ssid="Frame", hotspot_password="abc23def45")
+    write_status(cfg.network_status_file, "wifi", "Home")
+    app = create_app(cfg, controller=Controller(cfg, ipc=ipc, audio_ipc=audio_ipc))
+    client = app.test_client()
+    net = client.get("/api/status").get_json()["network"]
+    assert net == {"mode": "wifi", "network": "Home", "hotspot_ssid": "Frame",
+                   "hotspot_password": "abc23def45"}
+    page = client.get("/").get_data(as_text=True)
+    assert "Wi-Fi “Home”" in page and "abc23def45" in page and "10.42.0.1" in page

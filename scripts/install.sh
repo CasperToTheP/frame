@@ -58,11 +58,11 @@ step "Installing Frame on: $MODEL"
 info "source: $REPO_DIR"
 
 # --- packages -----------------------------------------------------------------
-step "Installing system packages (mpv, Python, Avahi, ALSA tools, SVG renderer)"
+step "Installing system packages (mpv, Python, Avahi, ALSA tools, SVG renderer, hotspot)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
-  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates librsvg2-bin
+  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates librsvg2-bin   dnsmasq-base iw
 info "$(mpv --version | head -n1)"
 
 PY_OK=$(python3 -c 'import sys; print(int(sys.version_info >= (3, 11)))')
@@ -131,19 +131,66 @@ if [[ ! -f /etc/default/frame ]]; then
 EOF
   info "created /etc/default/frame"
 fi
+if ! grep -q '^FRAME_HOTSPOT_PASSWORD=' /etc/default/frame; then
+  HOTSPOT_PW="$(python3 -c 'import secrets; a = "abcdefghjkmnpqrstuvwxyz23456789"; print("".join(secrets.choice(a) for _ in range(10)))')"
+  cat >>/etc/default/frame <<EOF
+
+# The frame's own Wi-Fi, started when the home Wi-Fi can't be reached. Change the
+# password here (8-63 characters), then re-run the installer.
+FRAME_HOTSPOT_SSID=Frame
+FRAME_HOTSPOT_PASSWORD=$HOTSPOT_PW
+EOF
+  info "generated a password for the Wi-Fi hotspot"
+fi
+# It holds the hotspot password. systemd reads it as root.
+chmod 0600 /etc/default/frame
 
 # --- systemd ------------------------------------------------------------------
 step "Installing systemd services"
 install -m 0644 "$REPO_DIR/systemd/frame-player.service" /etc/systemd/system/
 install -m 0644 "$REPO_DIR/systemd/frame-web.service" /etc/systemd/system/
+install -m 0644 "$REPO_DIR/systemd/frame-netwatch.service" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable frame-player.service frame-web.service
+systemctl enable frame-player.service frame-web.service frame-netwatch.service
 for svc in frame-player frame-web; do
   if systemctl is-active --quiet "$svc"; then
     systemctl restart "$svc"
     info "restarted $svc (upgrade)"
   fi
 done
+
+# --- Wi-Fi hotspot fallback ------------------------------------------------------
+step "Configuring the Wi-Fi hotspot (used when the home Wi-Fi is out of reach)"
+HOTSPOT_SSID="$(. /etc/default/frame; echo "${FRAME_HOTSPOT_SSID:-Frame}")"
+HOTSPOT_PW="$(. /etc/default/frame; echo "${FRAME_HOTSPOT_PASSWORD:-}")"
+HOTSPOT_OK=0
+WIFI_DEV=""
+if command -v nmcli >/dev/null && systemctl is-active --quiet NetworkManager; then
+  WIFI_DEV="$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2 == "wifi" {print $1; exit}')"
+fi
+if [[ -z "$WIFI_DEV" ]]; then
+  warn "no Wi-Fi device managed by NetworkManager; skipping the hotspot"
+elif (( ${#HOTSPOT_PW} < 8 || ${#HOTSPOT_PW} > 63 )); then
+  warn "FRAME_HOTSPOT_PASSWORD in /etc/default/frame must be 8-63 characters; skipping the hotspot"
+else
+  # Autoconnect off: only frame-netwatch turns it on. 2.4 GHz reaches furthest.
+  # The Pi's Wi-Fi chip doesn't do PMF as an access point, so it is disabled.
+  HOTSPOT_PROPS=(connection.interface-name "$WIFI_DEV" connection.autoconnect no
+    802-11-wireless.ssid "$HOTSPOT_SSID" 802-11-wireless.mode ap 802-11-wireless.band bg
+    ipv4.method shared ipv6.method disabled
+    wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.pairwise ccmp wifi-sec.group ccmp
+    wifi-sec.pmf disable wifi-sec.psk "$HOTSPOT_PW")
+  # Modify rather than recreate, so a phone connected to the hotspot (maybe the
+  # one running this installer over SSH) stays connected.
+  if nmcli -t -f NAME connection show | grep -qx frame-hotspot; then
+    nmcli connection modify frame-hotspot "${HOTSPOT_PROPS[@]}"
+  else
+    nmcli connection add type wifi con-name frame-hotspot "${HOTSPOT_PROPS[@]}" >/dev/null
+  fi
+  HOTSPOT_OK=1
+  info "hotspot \"$HOTSPOT_SSID\" on $WIFI_DEV (web UI there: http://10.42.0.1:8080)"
+fi
+systemctl restart frame-netwatch.service
 
 # --- mDNS (frame.local) ------------------------------------------------------
 step "Configuring mDNS (Avahi)"
@@ -230,3 +277,13 @@ cat <<EOF
     The web UI has no password. Use it only on a trusted home network.
 
 EOF
+if [[ $HOTSPOT_OK -eq 1 ]]; then
+  cat <<EOF
+    No home Wi-Fi in reach? After about 1.5 minutes the frame starts its own:
+      Wi-Fi network:       $HOTSPOT_SSID
+      Password:            $HOTSPOT_PW
+      Then open:           http://10.42.0.1:8080
+    (The password is in /etc/default/frame and in the web UI under Display > Advanced.)
+
+EOF
+fi

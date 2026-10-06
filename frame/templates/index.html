@@ -184,6 +184,13 @@
         Display: {{ status.player.display or '–' }} ·
         Player restarts: {{ status.player.restarts if status.player.restarts is not none else '–' }}
       </p>
+      {% set net = status.network %}
+      <p class="hint" id="network">
+        Network: {% if net.mode == 'wifi' %}Wi-Fi “{{ net.network }}”{% elif net.mode == 'hotspot' %}own hotspot{% else %}{{ net.mode or '–' }}{% endif %}
+        {% if net.hotspot_password %}<br>When the home Wi-Fi is out of reach, the frame starts its own
+        Wi-Fi “{{ net.hotspot_ssid }}” (password <code>{{ net.hotspot_password }}</code>);
+        then open http://10.42.0.1:8080.{% endif %}
+      </p>
     </details>
   </section>
 </main>

@@ -144,7 +144,8 @@ What the installer does (it's safe to run again, and it never deletes media or s
   `cmdline.txt.frame-backup` and `config.txt.frame-backup` in `/boot/firmware`. To skip
   this step, run with `--no-boot-config`.
 
-Optional settings go in `/etc/default/frame`: port, upload size limit and log level.
+Optional settings go in `/etc/default/frame`: port, upload size limit, log level and the
+hotspot name and password (see [Without home Wi-Fi](#without-home-wi-fi)).
 
 ## Using it
 
@@ -207,6 +208,26 @@ Under **Display**:
   crisp square when small artwork is enlarged, for pixel-art NFTs and retro GIFs.
 - **Advanced:** pick the audio output and the hardware decoding mode, and see which
   decoder is in use.
+
+### Without home Wi-Fi
+The artwork always plays without any network. Only the web UI needs a connection. If
+the frame can't reach your home Wi-Fi (weak signal, router off, a new home, or no Wi-Fi
+saved at all), it starts **its own Wi-Fi network** after about 1.5 minutes:
+
+1. On your phone, join the Wi-Fi **Frame**. The password is printed at the end of the
+   installer, shown in the web UI under **Display → Advanced**, and stored in
+   `/etc/default/frame`.
+2. Open **http://10.42.0.1:8080**.
+
+Your phone may say the network has no internet; stay connected anyway. While nobody is
+connected to the hotspot, the frame tries the home Wi-Fi again every 10 minutes, and goes
+back to it as soon as it's in reach. The Pi's Wi-Fi can only do one of the two at a time.
+
+To run the frame **without home Wi-Fi for good**, forget the home network on the Pi
+(`sudo nmcli connection delete "<your network>"`). It then always uses its own hotspot.
+To change the hotspot's name or password, edit `FRAME_HOTSPOT_SSID` and
+`FRAME_HOTSPOT_PASSWORD` in `/etc/default/frame` (8-63 characters) and re-run the
+installer.
 
 ### Delete artwork
 Tap the **bin** next to a file. If it's in the playlist or sound list, you're asked to
@@ -466,6 +487,8 @@ journalctl -u frame-player -b --no-pager | tail -50
 - Check `systemctl status avahi-daemon` and `hostname` on the Pi.
 
 ### Web UI unreachable but the artwork plays
+If the Wi-Fi signal is the problem, look for the frame's own Wi-Fi **Frame** (see
+[Without home Wi-Fi](#without-home-wi-fi)). `frame-doctor` shows the signal strength.
 Playback doesn't need the web service. Check `systemctl status frame-web`, then try
 `curl http://127.0.0.1:8080/api/status` on the Pi. If that works but your phone can't
 connect, it's a network problem: Wi-Fi, client isolation or the IP address.

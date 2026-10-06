@@ -24,12 +24,14 @@ working offline.
 
 ## Architecture
 
-Two systemd services, both running as the unprivileged system user `frame`:
+Two main systemd services, both running as the unprivileged system user `frame`, plus a
+small root service for the Wi-Fi fallback:
 
 | Service | Module | Role |
 |---|---|---|
 | `frame-player.service` | `frame/player_service.py` | Supervisor. Starts the artwork mpv and an audio-only "soundtrack" mpv with the saved state, and treats them as a pair: if either exits, hangs (IPC health check), the artwork mpv has no video output (`vo-configured` false) or a video's `time-pos` stops moving for 15 s while not paused (freeze watchdog), both restart with backoff. Waits for an HDMI display and restarts both on HDMI hotplug. Writes `/run/frame/player.json`. Never imports Flask. |
 | `frame-web.service` | `frame/web.py` (+ `controller.py`) | Flask app served by waitress on :8080. Server-rendered HTML + vanilla JS. Saves what to play in `state.json`; changes live settings (volume, pause, rotation...) over mpv JSON IPC. |
+| `frame-netwatch.service` | `frame/netwatch.py` | Runs as root. When the home Wi-Fi can't be reached for 90 s, brings up the NetworkManager connection `frame-hotspot` (made by the installer, autoconnect off) so a phone can reach the UI at `http://10.42.0.1:8080`. While no phone is connected, hands Wi-Fi back to NetworkManager every 10 min to try the home network. Only runs `nmcli` and `iw`. Writes `/run/frame/network.json`. |
 
 Key rules:
 
@@ -103,8 +105,9 @@ Key rules:
 | `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
 | `/run/frame/audio.sock` | soundtrack mpv IPC socket |
 | `/run/frame/player.json` | supervisor health info and what's playing, read by the UI |
+| `/run/frame/network.json` | Wi-Fi mode (`wifi`, `hotspot`, ...), written by frame-netwatch |
 | `/run/frame/next-visual`, `next-sound` | "skip now" requests from the web UI (deleted by the Director) |
-| `/etc/default/frame` | optional env overrides (`FRAME_*`, see `config.py`) |
+| `/etc/default/frame` | env overrides (`FRAME_*`, see `config.py`), incl. the generated hotspot password; mode 0600 |
 | `/etc/systemd/system/frame-*.service` | units (source in `systemd/`) |
 
 Logs go to journald only: `journalctl -u frame-player -u frame-web`.

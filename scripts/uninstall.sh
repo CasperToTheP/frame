@@ -14,9 +14,11 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo "Stopping and removing services..."
-systemctl disable --now frame-player.service frame-web.service 2>/dev/null || true
-rm -f /etc/systemd/system/frame-player.service /etc/systemd/system/frame-web.service
+systemctl disable --now frame-player.service frame-web.service frame-netwatch.service   2>/dev/null || true
+rm -f /etc/systemd/system/frame-player.service /etc/systemd/system/frame-web.service   /etc/systemd/system/frame-netwatch.service
 systemctl daemon-reload
+# The fallback hotspot (NetworkManager then rejoins the home Wi-Fi by itself).
+nmcli connection delete frame-hotspot >/dev/null 2>&1 || true
 
 rm -f /etc/tmpfiles.d/frame.conf /etc/avahi/services/frame.service \
   /etc/NetworkManager/conf.d/frame-wifi-powersave.conf

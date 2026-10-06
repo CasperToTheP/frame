@@ -22,6 +22,7 @@ from .config import Config
 from .director import NEXT_SOUND, NEXT_VISUAL
 from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
 from .mediainfo import pi_warning
+from .netwatch import read_status as read_network_status
 from .player import (
     MpvIpc,
     PlayerError,
@@ -74,6 +75,9 @@ class Controller:
             "player": {"reachable": False},
             "playback": "unknown",
             "system_uptime": _system_uptime(),
+            "network": dict(read_network_status(self.cfg.network_status_file),
+                            hotspot_ssid=self.cfg.hotspot_ssid,
+                            hotspot_password=self.cfg.hotspot_password),
             # Lets the UI turn the player's "next_at" times into countdowns
             # even if the phone's clock is off.
             "server_time": time.time(),
