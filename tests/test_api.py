@@ -453,3 +453,77 @@ def test_auto_hwdec_is_translated_for_the_running_mpv(client, ipc):
     res = client.post("/api/settings", json={"hwdec": "auto"})
     assert res.get_json()["hwdec"] == "auto"
     assert ("set", "hwdec", "v4l2m2m-copy,auto-safe") in ipc.calls
+
+
+# --- saved playlists and previews ---------------------------------------------
+
+
+def test_save_load_and_delete_named_playlists(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("s.mp3", MP3)]:
+        post_file(client, name, data)
+    client.post("/api/playlist", json={"items": ["a.mp4", "b.png"], "interval": 60})
+    client.post("/api/sounds", json={"items": ["s.mp3"]})
+    client.post("/api/settings", json={"fade": 2})
+    assert client.post("/api/saved", json={"name": "  Evening  "}).get_json()["name"] == "Evening"
+
+    client.post("/api/playlist", json={"items": ["b.png"], "interval": 600})
+    client.post("/api/sounds", json={"items": []})
+    client.post("/api/saved", json={"name": "Sleeping"})
+    saved = {p["name"]: p for p in client.get("/api/status").get_json()["saved"]}
+    assert saved["Sleeping"]["active"] and not saved["Evening"]["active"]
+    assert (saved["Evening"]["count"], saved["Evening"]["sound_count"]) == (2, 1)
+    assert saved["Evening"]["first"] == "a.mp4"
+
+    client.post("/api/stop")
+    res = client.post("/api/saved/load", json={"name": "Evening"})
+    assert res.status_code == 200
+    st = state(ctl)
+    assert (st["playlist"], st["interval"], st["sounds"], st["fade"], st["blank"]) == \
+        (["a.mp4", "b.png"], 60, ["s.mp3"], 2.0, False)
+    saved = {p["name"]: p for p in client.get("/api/status").get_json()["saved"]}
+    assert saved["Evening"]["active"] and not saved["Sleeping"]["active"]
+
+    assert client.delete("/api/saved/Sleeping").status_code == 200
+    assert list(state(ctl)["saved"]) == ["Evening"]
+    assert client.delete("/api/saved/Sleeping").status_code == 404
+    assert client.post("/api/saved/load", json={"name": "Nope"}).status_code == 404
+
+
+def test_save_playlist_validation(client):
+    assert client.post("/api/saved", json={"name": "Empty"}).status_code == 400  # no artwork
+    post_file(client, "a.mp4", MP4, add="1")
+    assert client.post("/api/saved", json={"name": ""}).status_code == 400
+    assert client.post("/api/saved", json={"name": "x" * 41}).status_code == 400
+    assert client.post("/api/saved", json={"name": 5}).status_code == 400
+    assert client.post("/api/saved", json={"name": "Ok"}).status_code == 200
+
+
+def test_deleting_a_file_removes_it_from_saved_playlists(client, ctl):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "b.png", PNG, add="1")
+    client.post("/api/saved", json={"name": "Both"})
+    client.post("/api/playlist", json={"items": ["a.mp4"]})
+    assert client.delete("/api/media/b.png").status_code == 200
+    assert state(ctl)["saved"]["Both"]["playlist"] == ["a.mp4"]
+
+
+def test_media_previews(client, cfg):
+    post_file(client, "a.mp4", MP4)
+    res = client.get("/media/a.mp4", headers={"Range": "bytes=0-9"})
+    assert res.status_code == 206 and res.data == MP4[:10]
+    assert res.headers["Content-Type"] == "video/mp4"
+    assert client.get("/media/nope.mp4").status_code == 404
+    cfg.data_dir.joinpath("state.json").write_text("{}")
+    assert client.get("/media/..%2Fstate.json").status_code in (400, 404)
+    assert client.get("/media/.incoming").status_code in (400, 404)
+
+
+def test_page_has_tabs_saved_chips_and_previews(client):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "b.png", PNG, add="1")
+    client.post("/api/saved", json={"name": "Sleeping"})
+    html = client.get("/").get_data(as_text=True)
+    for view in ("now", "playlists", "library", "settings"):
+        assert f'data-view="{view}"' in html and f'href="#{view}"' in html
+    assert 'data-load="Sleeping"' in html
+    assert 'data-src="/media/a.mp4#t=0.5"' in html and 'src="/media/b.png"' in html

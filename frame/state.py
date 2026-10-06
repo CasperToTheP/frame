@@ -25,6 +25,11 @@ FADES = (0, 0.5, 1, 2, 3)
 MAX_FADE = 5
 MAX_PLAYLIST = 500
 MAX_INTERVAL = 24 * 3600
+MAX_SAVED = 50
+MAX_SAVED_NAME = 40
+# What a saved playlist ("Sleeping", "Morning"...) remembers.
+SAVED_KEYS = ("playlist", "interval", "shuffle", "sounds", "sound_interval",
+              "sound_shuffle", "fade")
 
 DEFAULTS: dict[str, Any] = {
     # Visual filenames (inside the media directory) played in order. One item
@@ -52,6 +57,10 @@ DEFAULTS: dict[str, Any] = {
     "audio_device": "auto",
     # mpv --hwdec value, or "auto": Frame's choice for the Pi 4 (player.hwdec_arg).
     "hwdec": "auto",
+    # Saved playlists by name: {"Sleeping": {"playlist": [...], "interval": 600, ...}}.
+    # Each holds the SAVED_KEYS. The player ignores these; loading one copies it over
+    # the live settings above.
+    "saved": {},
 }
 
 
@@ -102,10 +111,36 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
         elif key == "scaling":
             if value not in SCALING_MODES:
                 raise StateError(f"scaling must be one of {', '.join(SCALING_MODES)}")
+        elif key == "saved":
+            value = _validate_saved(value)
         elif key in ("audio_device", "hwdec"):
             if not isinstance(value, str) or not value or "\n" in value:
                 raise StateError(f"{key} must be a non-empty string")
         out[key] = value
+    return out
+
+
+def saved_name(name: Any) -> str:
+    """A cleaned-up saved-playlist name, or StateError."""
+    if not isinstance(name, str):
+        raise StateError("name must be text")
+    name = " ".join(name.split())
+    if not name or len(name) > MAX_SAVED_NAME:
+        raise StateError(f"name must be 1-{MAX_SAVED_NAME} characters")
+    return name
+
+
+def _validate_saved(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        raise StateError("saved must be an object of named playlists")
+    if len(value) > MAX_SAVED:
+        raise StateError(f"at most {MAX_SAVED} saved playlists")
+    out = {}
+    for name, entry in value.items():
+        if not isinstance(entry, dict) or set(entry) - set(SAVED_KEYS):
+            raise StateError(f"saved playlist {name!r} is not valid")
+        full = {k: entry.get(k, DEFAULTS[k]) for k in SAVED_KEYS}
+        out[saved_name(name)] = validate(full)
     return out
 
 

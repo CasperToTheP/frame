@@ -32,7 +32,7 @@ from .player import (
     parse_mpv_version,
     scale_filter,
 )
-from .state import StateStore
+from .state import SAVED_KEYS, StateStore, saved_name
 
 log = logging.getLogger("frame.control")
 
@@ -67,6 +67,7 @@ class Controller:
             "sound_interval": state["sound_interval"],
             "sound_shuffle": state["sound_shuffle"],
             "fade": state["fade"],
+            "saved": self._saved_summary(state),
             "volume": state["volume"],
             "muted": state["muted"],
             "rotation": state["rotation"],
@@ -210,6 +211,49 @@ class Controller:
         self.state.update(blank=False)
         log.info("playback started")
 
+    # --- saved playlists ("Sleeping", "Morning"...) ---------------------------
+
+    def _saved_summary(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        current = {k: state[k] for k in SAVED_KEYS}
+        return [
+            {"name": name, "count": len(entry["playlist"]), "sound_count": len(entry["sounds"]),
+             "first": next(iter(self.library.playable(entry["playlist"], VISUAL_KINDS)), None),
+             # The one that's playing now, unless it's been edited since.
+             "active": not state["blank"] and entry == current}
+            for name, entry in state["saved"].items()
+        ]
+
+    def save_playlist(self, name: Any) -> dict[str, Any]:
+        """Save the current playlist, sound list and their settings under ``name``.
+        An existing playlist with that name is replaced."""
+        name = saved_name(name)
+        state = self.state.load()
+        if not state["playlist"]:
+            raise MediaError("the playlist is empty; add some artwork first")
+        saved = dict(state["saved"])
+        saved[name] = {k: state[k] for k in SAVED_KEYS}
+        self.state.update(saved=saved)
+        log.info("saved playlist %r", name)
+        return {"name": name}
+
+    def load_playlist(self, name: Any) -> dict[str, Any]:
+        """Play a saved playlist (its artwork, sounds, timing and fade)."""
+        name = saved_name(name)
+        entry = self.state.load()["saved"].get(name)
+        if entry is None:
+            raise MediaError(f"no saved playlist called {name!r}", 404)
+        self.state.update(**entry, blank=False)
+        log.info("playing saved playlist %r", name)
+        return self._offline_warning()
+
+    def delete_playlist(self, name: Any) -> None:
+        name = saved_name(name)
+        saved = dict(self.state.load()["saved"])
+        if saved.pop(name, None) is None:
+            raise MediaError(f"no saved playlist called {name!r}", 404)
+        self.state.update(saved=saved)
+        log.info("deleted saved playlist %r", name)
+
     def _check(self, name: str, kinds: tuple[str, ...], why: str) -> None:
         self.library.resolve(name)  # 400 for bad names, 404 if missing
         if kind_of(name) not in kinds:
@@ -317,6 +361,15 @@ class Controller:
                     409,
                 )
             self.state.update(**{k: [n for n in v if n != name] for k, v in lists.items()})
+        # Saved playlists forget the file too.
+        state = self.state.load()
+        saved = {
+            title: dict(entry, **{k: [n for n in entry[k] if n != name]
+                                  for k in ("playlist", "sounds")})
+            for title, entry in state["saved"].items()
+        }
+        if saved != state["saved"]:
+            self.state.update(saved=saved)
         self.library.delete(name)
         log.info("deleted %s", name)
 

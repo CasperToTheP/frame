@@ -103,3 +103,18 @@ def test_settings_from_older_versions_are_upgraded(tmp_path, old, playlist, soun
     state = StateStore(path).load()
     assert (state["playlist"], state["sounds"], state["volume"]) == (playlist, sounds, 33)
     assert "current" not in state and "soundtrack" not in state
+
+
+def test_saved_playlists_are_validated(tmp_path):
+    good = {"Sleeping": {"playlist": ["a.mp4"], "fade": 3}}
+    out = validate({"saved": good})["saved"]["Sleeping"]
+    assert out["playlist"] == ["a.mp4"] and out["fade"] == 3.0 and out["interval"] == 300
+    for bad in ({"x": {"volume": 3}}, {"": {"playlist": []}}, {"x": []}, [],
+                {"x": {"playlist": "a"}}):
+        with pytest.raises(StateError):
+            validate({"saved": bad})
+    # A bad saved playlist in the file doesn't break the rest of the settings.
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"volume": 20, "saved": {"x": {"nope": 1}}}))
+    st = StateStore(path).load()
+    assert st["volume"] == 20 and st["saved"] == {}

@@ -94,6 +94,14 @@ Key rules:
 - `web.py:check_access()` is the single hook for future authentication. It currently only
   refuses cross-origin POSTs. Control endpoints require `application/json`, which forces
   a CORS preflight, as a cheap CSRF guard.
+- **Saved playlists** live in `state.json` under `saved` (name → the `SAVED_KEYS`
+  settings). The Director ignores them; loading one copies its settings over the live
+  ones. "Active" is computed by comparing, never stored.
+- **The UI** is one server-rendered page with four tab views (`#now`, `#playlists`,
+  `#library`, `#settings`) switched by `app.js`; actions save and reload the page, which
+  keeps the tab and scroll position. Previews are the original files from `/media/<name>`
+  (range requests, so a phone reads only a video's first frame, lazily). There are no
+  thumbnails on disk and no server-side image work.
 - Uploads stream to `/var/lib/frame/media/.incoming/` (same filesystem as the media), are
   checked by extension and magic bytes, then renamed into place. waitress spools request
   bodies to `TMPDIR=/var/lib/frame/tmp`, never to RAM or tmpfs.

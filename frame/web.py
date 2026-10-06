@@ -13,7 +13,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from flask import Flask, Request, abort, current_app, jsonify, render_template, request
+from flask import (
+    Flask,
+    Request,
+    abort,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+    send_file,
+)
 from werkzeug.exceptions import HTTPException
 
 from . import __version__
@@ -121,10 +130,13 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
 
     @app.get("/")
     def index():
+        media = ctl.media()
         return render_template(
             "index.html",
             status=ctl.status(),
-            media=ctl.media(),
+            media=media,
+            media_index={m["name"]: m for m in media},
+            kinds={m["name"]: m["kind"] for m in media},
             rotations=ROTATIONS,
             fit_modes=FIT_MODES,
             scaling_modes=SCALING_MODES,
@@ -135,6 +147,15 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             max_upload_mb=cfg.max_upload_mb,
             version=__version__,
         )
+
+    @app.get("/media/<path:name>")
+    def media_file(name: str):
+        # The original file, for previews in the UI. Range requests let a phone
+        # read just the start of a video for its first frame.
+        path = ctl.library.resolve(name)
+        response = send_file(path, conditional=True, max_age=3600)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     # --- API ----------------------------------------------------------------------
 
@@ -229,6 +250,20 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     def api_sounds():
         # Any of {"items": [...], "interval": seconds (0 = whole track), "shuffle": bool}
         return jsonify(ctl.set_sounds(_json_body()))
+
+    @app.post("/api/saved")
+    def api_save_playlist():
+        # {"name": "Sleeping"}: save the current playlist + sounds under that name.
+        return jsonify(ok=True, **ctl.save_playlist(_json_body().get("name")))
+
+    @app.post("/api/saved/load")
+    def api_load_playlist():
+        return jsonify(ok=True, **ctl.load_playlist(_json_body().get("name")))
+
+    @app.delete("/api/saved/<path:name>")
+    def api_delete_playlist(name: str):
+        ctl.delete_playlist(name)
+        return jsonify(deleted=name)
 
     @app.post("/api/next")
     def api_next():

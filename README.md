@@ -150,12 +150,31 @@ hotspot name and password (see [Without home Wi-Fi](#without-home-wi-fi)).
 ## Using it
 
 ### Open the web UI
-`http://frame.local:8080` (or `http://<pi-ip>:8080`). Tip: add it to your phone's home screen.
+`http://frame.local:8080` (or `http://<pi-ip>:8080`). Tip: add it to your phone's home
+screen; it then opens like an app.
+
+The tab bar at the bottom has four screens:
+- **Now**: what's on the frame (with a preview), play/pause, next, mute, volume, your saved
+  playlists as one-tap buttons, and **Black screen**.
+- **Playlists**: your saved playlists, and the current artwork and sound lists.
+- **Library**: every file as a preview grid. Tap one for **Play now**,
+  **Add to / Remove from playlist** and **Delete**. Filter by *Artwork* or *Music*.
+- **Settings**: display, network and advanced options.
+
+### Saved playlists
+Save what's playing under a name — “Sleeping”, “Morning”, “Party” — and switch between
+them with one tap on **Now** or **Playlists**. A saved playlist remembers the artwork, the
+sound list, their timing, shuffle and the fade.
+- **Save current** asks for a name. Using an existing name replaces that one.
+- The playlist that's playing is highlighted. If you change the current lists afterwards,
+  the highlight goes away until you save again (the saved version doesn't change by itself).
+- **✕** on a saved playlist deletes it; the files stay in the Library. Deleting a file also
+  removes it from every saved playlist.
 
 ### Upload
-In **Upload**, choose one or more files and tap **Upload**. A progress bar shows while it
-uploads. With **Add to playlist / sound** ticked (the default), visuals are added to the
-end of the playlist and audio files to the sound list. See
+In **Library**, tap **Upload files** and choose one or more files; the upload starts at
+once and shows its progress. With **Add to playlist / sound** on (the default), visuals are
+added to the end of the playlist and audio files to the sound list. See
 [Supported files](#supported-files). The default size limit is 4 GB, and an upload is
 refused if it would leave less than 256 MB free on the SD card.
 
@@ -167,17 +186,17 @@ video, AV1 or VP9, or a GIF over 50 MB. Convert them as described in
 ### Playlist
 The **Playlist** is the artwork the frame shows, in order. Everything is saved and
 continues after a reboot or power cut.
-- **Add** next to a file in the **Library** puts it at the end. **↑ ↓** reorder, **✕**
-  removes from the playlist (the file stays in the Library).
-- **Play** next to a file shows only that one, looping forever. This replaces the
-  playlist.
+- Tap a file in the **Library**, then **Add to playlist**, to put it at the end. **↑ ↓**
+  reorder, **✕** removes from the playlist (the file stays in the Library).
+- **Play now** on a file shows only that one, looping forever. This replaces the
+  current playlist (your saved playlists are untouched).
 - **Change every**: how long each item stays, from 15 seconds to 1 hour. *Full length*
   plays each video or GIF once through; images then stay for 1 minute. Videos shorter than
   the interval loop until it's time to move on.
 - **Fade between items**: the picture fades to black and back (and so does the
   artwork's own sound). *Off* cuts straight over.
 - **Shuffle** plays the items in random order, never the same one twice in a row.
-- **Next** under **Now playing** skips ahead now. The countdown shows when the next change
+- **Next** (⏭ on **Now**) skips ahead now. The countdown shows when the next change
   is due.
 
 ### Sound
@@ -230,8 +249,8 @@ To change the hotspot's name or password, edit `FRAME_HOTSPOT_SSID` and
 installer.
 
 ### Delete artwork
-Tap the **bin** next to a file. If it's in the playlist or sound list, you're asked to
-confirm; it's removed from the list and the frame moves on to the next item.
+Tap the file in **Library**, then **Delete file**. If it's in the playlist or sound list,
+it's removed from them (and from saved playlists) and the frame moves on to the next item.
 
 ### Reboot / shut down
 ```bash
@@ -270,6 +289,10 @@ The UI uses a small JSON API that you can also script against:
 | `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play only this audio file / back to the artwork's own sound |
 | `POST /api/next` | `{"which": "visual"}` or `{"which": "sound"}` | skip to the next item now |
 | `POST /api/stop` / `POST /api/start` | | black screen (keeps the playlist) / start again |
+| `POST /api/saved` | `{"name": "Sleeping"}` | save the current playlist, sounds and their settings under a name (replaces one with that name) |
+| `POST /api/saved/load` | `{"name": "Sleeping"}` | play a saved playlist |
+| `DELETE /api/saved/<name>` | | delete a saved playlist |
+| `GET /media/<name>` | | the file itself (previews in the UI; supports range requests) |
 | `POST /api/pause` / `POST /api/resume` | | pause / resume |
 | `POST /api/volume` | `{"volume": 60}` | volume 0–100 |
 | `POST /api/mute` | `{"muted": true}` or `{}` to toggle | mute |

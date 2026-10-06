@@ -2,200 +2,329 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111111">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f0f12" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Frame">
   <title>Frame</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
-<body data-now="{{ status.now|tojson|forceescape }}">
-<header>
-  <h1>Frame</h1>
-  <span id="health" class="badge {{ 'ok' if status.player.reachable else 'bad' }}">
-    {{ 'player online' if status.player.reachable else 'player offline' }}
+{% set now = status.now %}
+<body data-now="{{ now|tojson|forceescape }}"
+      data-kinds="{{ kinds|tojson|forceescape }}"
+      data-saved="{{ status.saved|map(attribute='name')|list|tojson|forceescape }}">
+
+{# --- icons ------------------------------------------------------------------ #}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5.1v13.8a1 1 0 0 0 1.5.86l11-6.9a1 1 0 0 0 0-1.72l-11-6.9A1 1 0 0 0 8 5.1z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect fill="currentColor" x="6" y="5" width="4" height="14" rx="1.2"/><rect fill="currentColor" x="14" y="5" width="4" height="14" rx="1.2"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path fill="currentColor" d="M5 6.2v11.6a1 1 0 0 0 1.55.83l8.6-5.8a1 1 0 0 0 0-1.66l-8.6-5.8A1 1 0 0 0 5 6.2z"/><rect fill="currentColor" x="16.5" y="5" width="3" height="14" rx="1"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></g></symbol>
+  <symbol id="i-frame" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></g></symbol>
+  <symbol id="i-lists" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 11h16M4 16h9"/><path d="M16.5 14.5v5l4-2.5z" fill="currentColor"/></g></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></g></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></g></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M6 14l6-6 6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M6 10l6 6 6-6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></g></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></g></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></g></symbol>
+</svg>
+
+{% macro icon(name, cls='') -%}<svg class="i {{ cls }}" aria-hidden="true"><use href="#i-{{ name }}"/></svg>{%- endmacro %}
+
+{# A preview of a library file. Videos load lazily (app.js), and only their first frame. #}
+{% macro preview(name) -%}
+  {% set m = media_index.get(name) if name else none %}
+  {% if m and m.kind in ('image', 'animation') and m.size <= 15 * 1048576 %}
+    <img src="{{ url_for('media_file', name=m.name) }}" alt="" loading="lazy" decoding="async">
+  {% elif m and m.kind == 'video' %}
+    <span class="ph">{{ icon('film') }}</span><video muted playsinline preload="none" data-src="{{ url_for('media_file', name=m.name) }}#t=0.5"></video>
+  {% elif m and m.kind == 'audio' %}
+    <span class="ph ph-audio">{{ icon('music') }}</span>
+  {% else %}
+    <span class="ph">{{ icon('image') }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro interval_select(id, options, value) -%}
+  <select id="{{ id }}">
+    {% for secs, label in options %}<option value="{{ secs }}" {{ 'selected' if secs == value else '' }}>{{ label }}</option>{% endfor %}
+    {% if value not in options|map('first')|list %}<option value="{{ value }}" selected>{{ value }} seconds</option>{% endif %}
+  </select>
+{%- endmacro %}
+
+{% macro item_list(id, items, now_name, empty_text) -%}
+  {% if items %}
+  <ol class="queue" id="{{ id }}-items">
+    {% for name in items %}
+    <li class="{{ 'playing' if name == now_name else '' }}">
+      <span class="thumb">{{ preview(name) }}</span>
+      <span class="q-name">{{ name }}{% if name == now_name %}<small>Playing now</small>{% endif %}</span>
+      <span class="q-actions">
+        <button class="icon-btn" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>{{ icon('up') }}</button>
+        <button class="icon-btn" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>{{ icon('down') }}</button>
+        <button class="icon-btn danger" data-remove="{{ id }}" data-index="{{ loop.index0 }}" aria-label="Remove {{ name }} from the list">{{ icon('x') }}</button>
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">{{ empty_text }}</p>
+  {% endif %}
+{%- endmacro %}
+
+{# Saved playlists as one-tap chips. #}
+{% macro saved_chips() -%}
+  <div class="chips" role="list">
+    {% for p in status.saved %}
+    <button class="chip {{ 'active' if p.active else '' }}" data-load="{{ p.name }}" role="listitem">
+      {% if p.active %}{{ icon('check') }}{% endif %}{{ p.name }}
+    </button>
+    {% endfor %}
+    <button class="chip chip-add" data-save>{{ icon('plus') }}Save current</button>
+  </div>
+{%- endmacro %}
+
+<header class="topbar">
+  <span class="brand">Frame</span>
+  <span id="health" class="status-pill {{ 'ok' if status.player.reachable else 'bad' }}">
+    <span class="dot"></span><span class="label">{{ 'Online' if status.player.reachable else 'Player offline' }}</span>
   </span>
 </header>
 
+<div id="toast" role="status" hidden></div>
+
 <main>
-  <div id="toast" role="status" hidden></div>
 
-  {% macro interval_select(id, options, value) -%}
-    <select id="{{ id }}">
-      {% for secs, label in options %}<option value="{{ secs }}" {{ 'selected' if secs == value else '' }}>{{ label }}</option>{% endfor %}
-      {% if value not in options|map('first')|list %}<option value="{{ value }}" selected>{{ value }} seconds</option>{% endif %}
-    </select>
-  {%- endmacro %}
-
-  {% macro item_list(id, items, now_name, empty_text) -%}
-    {% if items %}
-    <ol class="queue" id="{{ id }}-items">
-      {% for name in items %}
-      <li class="{{ 'playing' if name == now_name else '' }}">
-        <span class="name">{{ name }}</span>
-        <span class="actions">
-          <button class="icon" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>↑</button>
-          <button class="icon" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>↓</button>
-          <button class="icon danger" data-remove="{{ id }}" data-index="{{ loop.index0 }}" aria-label="Remove from list">✕</button>
-        </span>
-      </li>
-      {% endfor %}
-    </ol>
-    {% else %}
-    <p class="muted-text">{{ empty_text }}</p>
-    {% endif %}
-  {%- endmacro %}
-
-  {% set now = status.now %}
-  <section class="card" id="now">
-    <h2>Now playing</h2>
-    <p class="current" id="current">{{ now.visual.current or 'Nothing (black screen)' }}</p>
-    <p class="muted-text">
-      <span id="playback">{{ status.playback }}</span><span id="position"></span><span id="countdown"></span>
-    </p>
-    <p class="muted-text" id="sound-line">Sound: <span id="sound-now">{{ now.sound.current or "artwork's own" }}</span><span id="sound-countdown"></span></p>
-    <p class="error-text" id="player-error" {{ '' if now.error else 'hidden' }}>{{ now.error or '' }}</p>
-    <div class="controls">
-      <button id="btn-pause" data-action="pause">Pause</button>
-      <button id="btn-resume" data-action="resume">Play</button>
-      <button id="btn-next" data-next="visual" {{ '' if now.visual.count > 1 else 'hidden' }}>Next</button>
-      <button id="btn-mute" data-action="mute" aria-pressed="{{ 'true' if status.muted else 'false' }}">
-        {{ 'Unmute' if status.muted else 'Mute' }}
-      </button>
-      {% if status.blank %}
-      <button data-action="start">Start</button>
-      {% else %}
-      <button data-action="stop" class="secondary">Black screen</button>
-      {% endif %}
-    </div>
-    <label class="volume">
-      <span>Volume <output id="volume-out">{{ status.volume }}</output></span>
-      <input type="range" id="volume" min="0" max="100" step="1" value="{{ status.volume }}">
-    </label>
-  </section>
-
-  <section class="card" id="playlist" data-items="{{ status.playlist|tojson|forceescape }}">
-    <h2>Playlist <span class="count">{{ status.playlist|length }}</span></h2>
-    {{ item_list('playlist', status.playlist, now.visual.current,
-                 'Empty. Tap Add next to artwork in the Library.') }}
-    <div class="options">
-      <label>Change every {{ interval_select('interval', intervals, status.interval) }}</label>
-      <label>Fade between items
-        <select data-setting="fade">
-          {% for f in fades %}<option value="{{ f }}" {{ 'selected' if f == status.fade else '' }}>{{ 'Off' if f == 0 else f ~ ' s' }}</option>{% endfor %}
-          {% if status.fade not in fades %}<option value="{{ status.fade }}" selected>{{ status.fade }} s</option>{% endif %}
-        </select>
-      </label>
-      <label class="check"><input type="checkbox" id="shuffle" {{ 'checked' if status.shuffle else '' }}> Shuffle</label>
-    </div>
-  </section>
-
-  <section class="card" id="sounds" data-items="{{ status.sounds|tojson|forceescape }}">
-    <h2>Sound <span class="count">{{ status.sounds|length }}</span></h2>
-    {{ item_list('sounds', status.sounds, now.sound.current,
-                 "Each artwork's own sound. Add audio files from the Library to play music instead; it loops on its own.") }}
-    {% if status.sounds %}
-    <div class="options">
-      <label>Change track {{ interval_select('sound-interval', sound_intervals, status.sound_interval) }}</label>
-      <label class="check"><input type="checkbox" id="sound-shuffle" {{ 'checked' if status.sound_shuffle else '' }}> Shuffle</label>
-      <div class="controls">
-        <button data-next="sound" {{ '' if status.sounds|length > 1 else 'hidden' }}>Next track</button>
-        <button class="secondary" id="btn-own-sound">Use artwork's own sound</button>
+  {# ============================ NOW ============================ #}
+  <section class="view" id="view-now" data-view="now" aria-label="Now playing">
+    <div class="hero">
+      <div class="hero-media" id="hero-media">{{ preview(now.visual.current) }}</div>
+      <div class="hero-text">
+        <p class="eyebrow">Now playing</p>
+        <h1 id="current">{{ now.visual.current or 'Nothing — black screen' }}</h1>
+        <p class="sub"><span id="playback">{{ status.playback }}</span><span id="position"></span><span id="countdown"></span></p>
+        <p class="sub" id="sound-line">{{ icon('music', 'inline') }}<span id="sound-now">{{ now.sound.current or "Artwork's own sound" }}</span><span id="sound-countdown"></span></p>
+        <p class="error-text" id="player-error" {{ '' if now.error else 'hidden' }}>{{ now.error or '' }}</p>
       </div>
     </div>
-    {% endif %}
+
+    <div class="transport">
+      <button class="round" id="btn-mute" data-action="mute" aria-pressed="{{ 'true' if status.muted else 'false' }}" aria-label="{{ 'Unmute' if status.muted else 'Mute' }}">
+        {{ icon('mute' if status.muted else 'vol') }}
+      </button>
+      <button class="round big" id="btn-toggle" data-action="toggle" aria-label="Pause">{{ icon('pause') }}</button>
+      <button class="round" id="btn-next" data-next="visual" aria-label="Next artwork" {{ '' if now.visual.count > 1 else 'disabled' }}>{{ icon('next') }}</button>
+    </div>
+
+    <div class="volume">
+      {{ icon('vol', 'inline') }}
+      <input type="range" id="volume" min="0" max="100" step="1" value="{{ status.volume }}" aria-label="Volume">
+      <output id="volume-out">{{ status.volume }}</output>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Playlists</h2><a class="link" href="#playlists">Edit</a></div>
+      {% if not status.saved %}
+      <p class="empty">Save what's playing under a name — like “Sleeping” or “Morning” — and switch with one tap.</p>
+      {% endif %}
+      {{ saved_chips() }}
+    </div>
+
+    <div class="row-buttons">
+      {% if status.blank %}
+      <button class="btn primary wide" data-action="start">{{ icon('play') }}Start the frame</button>
+      {% else %}
+      <button class="btn ghost wide" data-action="stop">{{ icon('moon') }}Black screen</button>
+      {% endif %}
+    </div>
   </section>
 
-  <section class="card" id="upload">
-    <h2>Upload</h2>
-    <form id="upload-form">
-      <input type="file" name="file" id="file" accept="{{ accept }}" multiple required>
-      <label class="check"><input type="checkbox" name="add" value="1" checked> Add to playlist / sound</label>
-      <button type="submit">Upload</button>
+  {# ============================ PLAYLISTS ============================ #}
+  <section class="view" id="view-playlists" data-view="playlists" hidden aria-label="Playlists">
+    <h1 class="view-title">Playlists</h1>
+
+    <div class="card">
+      <div class="card-head"><h2>Saved</h2><button class="btn small" data-save>{{ icon('plus') }}Save current</button></div>
+      {% if status.saved %}
+      <div class="saved-grid">
+        {% for p in status.saved %}
+        <div class="saved-card {{ 'active' if p.active else '' }}">
+          <button class="saved-main" data-load="{{ p.name }}" aria-label="Play {{ p.name }}">
+            <span class="saved-thumb">{{ preview(p.first) }}<span class="play-badge">{{ icon('check' if p.active else 'play') }}</span></span>
+            <span class="saved-name">{{ p.name }}</span>
+            <span class="saved-meta">{{ p.count }} artwork{{ '' if p.count == 1 else 's' }}{% if p.sound_count %} · {{ p.sound_count }} track{{ '' if p.sound_count == 1 else 's' }}{% endif %}{% if p.active %} · playing{% endif %}</span>
+          </button>
+          <button class="icon-btn corner" data-delete-saved="{{ p.name }}" aria-label="Delete saved playlist {{ p.name }}">{{ icon('x') }}</button>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">Nothing saved yet. Set up the artwork and sound below, then tap <strong>Save current</strong> and give it a name.</p>
+      {% endif %}
+    </div>
+
+    <div class="card" id="playlist" data-items="{{ status.playlist|tojson|forceescape }}">
+      <div class="card-head"><h2>Artwork <span class="count">{{ status.playlist|length }}</span></h2>
+        {% if now.visual.count > 1 %}<button class="btn small" data-next="visual">{{ icon('next') }}Next</button>{% endif %}</div>
+      {{ item_list('playlist', status.playlist, now.visual.current,
+                   'Empty. Open the Library and tap a file to add it.') }}
+      <div class="options">
+        <label>Change every {{ interval_select('interval', intervals, status.interval) }}</label>
+        <label>Fade between items
+          <select data-setting="fade">
+            {% for f in fades %}<option value="{{ f }}" {{ 'selected' if f == status.fade else '' }}>{{ 'Off' if f == 0 else f ~ ' s' }}</option>{% endfor %}
+            {% if status.fade not in fades %}<option value="{{ status.fade }}" selected>{{ status.fade }} s</option>{% endif %}
+          </select>
+        </label>
+        <label class="switch"><span>Shuffle</span><input type="checkbox" id="shuffle" {{ 'checked' if status.shuffle else '' }}><span class="track"></span></label>
+      </div>
+    </div>
+
+    <div class="card" id="sounds" data-items="{{ status.sounds|tojson|forceescape }}">
+      <div class="card-head"><h2>Sound <span class="count">{{ status.sounds|length }}</span></h2>
+        {% if status.sounds|length > 1 %}<button class="btn small" data-next="sound">{{ icon('next') }}Next track</button>{% endif %}</div>
+      {{ item_list('sounds', status.sounds, now.sound.current,
+                   "Each artwork plays its own sound. Add music from the Library to play it instead — it loops on its own.") }}
+      {% if status.sounds %}
+      <div class="options">
+        <label>Change track {{ interval_select('sound-interval', sound_intervals, status.sound_interval) }}</label>
+        <label class="switch"><span>Shuffle</span><input type="checkbox" id="sound-shuffle" {{ 'checked' if status.sound_shuffle else '' }}><span class="track"></span></label>
+        <button class="btn ghost wide" id="btn-own-sound">Use each artwork's own sound</button>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ============================ LIBRARY ============================ #}
+  <section class="view" id="view-library" data-view="library" hidden aria-label="Library">
+    <h1 class="view-title">Library <span class="count">{{ media|length }}</span></h1>
+
+    <form id="upload-form" class="upload">
+      <label class="btn primary wide upload-btn">
+        {{ icon('upload') }}<span>Upload files</span>
+        <input type="file" name="file" id="file" accept="{{ accept }}" multiple hidden>
+      </label>
+      <label class="switch compact"><span>Add to playlist / sound</span><input type="checkbox" name="add" value="1" checked><span class="track"></span></label>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p class="hint">
-        Video (MP4 recommended), GIF, images (JPG, PNG, WebP, SVG…) or audio
-        (MP3, M4A, WAV, FLAC…). You can pick several files. Max {{ max_upload_mb }} MB.
-      </p>
+      <p class="hint">Videos (MP4 works best), GIFs, images (JPG, PNG, WebP, SVG…) and music (MP3, M4A, WAV, FLAC…). Max {{ max_upload_mb }} MB each.</p>
     </form>
-  </section>
 
-  <section class="card" id="library">
-    <h2>Library <span class="count">{{ media|length }}</span></h2>
     {% if media %}
-    <ul class="media">
+    <div class="filters" role="tablist" aria-label="Show">
+      <button class="filter active" data-filter="all" role="tab" aria-selected="true">All</button>
+      <button class="filter" data-filter="visual" role="tab" aria-selected="false">Artwork</button>
+      <button class="filter" data-filter="audio" role="tab" aria-selected="false">Music</button>
+    </div>
+    <div class="tiles">
       {% for m in media %}
       {% set listed = m.in_sounds if m.kind == 'audio' else m.in_playlist %}
-      <li class="{{ 'playing' if m.playing else '' }}" data-name="{{ m.name }}">
-        <div class="info">
-          <span class="name">{{ m.name }}</span>
-          <span class="meta">{{ m.kind }} · {{ (m.size / 1048576) | round(1) }} MB{% if m.playing %} · <strong>playing</strong>{% elif listed %} · in {{ 'sound' if m.kind == 'audio' else 'playlist' }}{% endif %}</span>
-          {% if m.warning %}<span class="warn-text">⚠ {{ m.warning }}</span>{% endif %}
-        </div>
-        <div class="actions">
-          {% if m.kind == 'audio' %}
-          <button data-sound="{{ m.name }}" title="Play only this sound">Play</button>
-          {% else %}
-          <button data-play="{{ m.name }}" title="Show only this artwork">Play</button>
-          {% endif %}
-          <button class="secondary" data-add="{{ m.name }}" {{ 'disabled' if listed else '' }}>{{ 'Added' if listed else 'Add' }}</button>
-          <button class="danger icon" data-delete="{{ m.name }}" data-listed="{{ '1' if (m.in_playlist or m.in_sounds) else '' }}" aria-label="Delete {{ m.name }}">🗑</button>
-        </div>
-      </li>
+      <button class="tile {{ 'playing' if m.playing else '' }}" data-tile="{{ m.name }}"
+              data-kind="{{ m.kind }}" data-listed="{{ '1' if listed else '' }}"
+              data-size="{{ (m.size / 1048576) | round(1) }}" data-warning="{{ m.warning or '' }}">
+        <span class="tile-media">{{ preview(m.name) }}
+          {% if m.playing %}<span class="badge badge-play">Playing</span>{% elif listed %}<span class="badge" title="In {{ 'sound' if m.kind == 'audio' else 'playlist' }}">{{ icon('check') }}</span>{% endif %}
+          {% if m.warning %}<span class="badge badge-warn" title="{{ m.warning }}">!</span>{% endif %}
+        </span>
+        <span class="tile-name">{{ m.name }}</span>
+        <span class="tile-meta">{{ {'video': 'Video', 'animation': 'GIF', 'image': 'Image', 'audio': 'Music'}[m.kind] }} · {{ (m.size / 1048576) | round(1) }} MB</span>
+        {% if m.warning %}<span class="warn-text">May be too heavy for the Pi</span>{% endif %}
+      </button>
       {% endfor %}
-    </ul>
+    </div>
     {% else %}
-    <p class="muted-text">Nothing yet. Upload videos, GIFs, images or music above.</p>
+    <p class="empty big">Nothing here yet. Tap <strong>Upload files</strong> to add videos, GIFs, images or music.</p>
     {% endif %}
+
+    <dialog id="sheet" class="sheet" aria-labelledby="sheet-title">
+      <form method="dialog" class="sheet-inner">
+        <div class="sheet-head">
+          <span class="sheet-thumb" id="sheet-thumb"></span>
+          <div class="sheet-titles"><h2 id="sheet-title"></h2><p class="sub" id="sheet-meta"></p></div>
+        </div>
+        <p class="warn-text" id="sheet-warning" hidden></p>
+        <button type="button" class="btn primary wide" id="sheet-play">{{ icon('play') }}<span>Play now</span></button>
+        <button type="button" class="btn wide" id="sheet-list"></button>
+        <button type="button" class="btn ghost danger wide" id="sheet-delete">Delete file</button>
+        <button value="close" class="btn ghost wide">Cancel</button>
+      </form>
+    </dialog>
   </section>
 
-  <section class="card" id="settings">
-    <h2>Display</h2>
-    <label>Rotation
-      <select data-setting="rotation">
-        {% for r in rotations %}<option value="{{ r }}" {{ 'selected' if r == status.rotation else '' }}>{{ r }}°</option>{% endfor %}
-      </select>
-    </label>
-    <label>Fit
-      <select data-setting="fit">
-        {% for f in fit_modes %}<option value="{{ f }}" {{ 'selected' if f == status.fit else '' }}>{{ {'fit': 'Fit (black bars)', 'fill': 'Fill (crop)', 'stretch': 'Stretch'}[f] }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Scaling
-      <select data-setting="scaling">
-        {% for m in scaling_modes %}<option value="{{ m }}" {{ 'selected' if m == status.scaling else '' }}>{{ {'smooth': 'Smooth', 'sharp': 'Sharp (pixel art)'}[m] }}</option>{% endfor %}
-      </select>
-    </label>
-    <details>
-      <summary>Advanced</summary>
-      <label>Audio output
-        <select data-setting="audio_device" id="audio-device" data-current="{{ status.audio_device }}">
-          <option value="auto">Automatic (HDMI with display)</option>
-          {% if status.audio_device != 'auto' %}<option value="{{ status.audio_device }}" selected>{{ status.audio_device }}</option>{% endif %}
+  {# ============================ SETTINGS ============================ #}
+  <section class="view" id="view-settings" data-view="settings" hidden aria-label="Settings">
+    <h1 class="view-title">Settings</h1>
+    <div class="card" id="settings">
+      <h2>Display</h2>
+      <label>Rotation
+        <select data-setting="rotation">
+          {% for r in rotations %}<option value="{{ r }}" {{ 'selected' if r == status.rotation else '' }}>{{ r }}°</option>{% endfor %}
         </select>
       </label>
-      <label>Hardware decoding
-        <select data-setting="hwdec">
-          {% set modes = ['auto', 'auto-safe', 'v4l2m2m-copy', 'drm', 'no'] %}
-          {% for h in modes %}<option value="{{ h }}" {{ 'selected' if h == status.hwdec else '' }}>{{ 'Automatic (recommended)' if h == 'auto' else h }}</option>{% endfor %}
-          {% if status.hwdec not in modes %}<option selected>{{ status.hwdec }}</option>{% endif %}
+      <label>Fit
+        <select data-setting="fit">
+          {% for f in fit_modes %}<option value="{{ f }}" {{ 'selected' if f == status.fit else '' }}>{{ {'fit': 'Fit (black bars)', 'fill': 'Fill (crop)', 'stretch': 'Stretch'}[f] }}</option>{% endfor %}
         </select>
       </label>
-      <p class="hint" id="diag">
-        Decoder: <span id="hwdec-current">{{ status.player.hwdec_current or '–' }}</span> ·
-        Display: {{ status.player.display or '–' }} ·
-        Player restarts: {{ status.player.restarts if status.player.restarts is not none else '–' }}
-      </p>
+      <label>Scaling
+        <select data-setting="scaling">
+          {% for m in scaling_modes %}<option value="{{ m }}" {{ 'selected' if m == status.scaling else '' }}>{{ {'smooth': 'Smooth', 'sharp': 'Sharp (pixel art)'}[m] }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div class="card">
+      <h2>Network</h2>
       {% set net = status.network %}
       <p class="hint" id="network">
-        Network: {% if net.mode == 'wifi' %}Wi-Fi “{{ net.network }}”{% elif net.mode == 'hotspot' %}own hotspot{% else %}{{ net.mode or '–' }}{% endif %}
-        {% if net.hotspot_password %}<br>When the home Wi-Fi is out of reach, the frame starts its own
+        Network: {% if net.mode == 'wifi' %}Wi-Fi “{{ net.network }}”{% elif net.mode == 'hotspot' %}the frame's own hotspot{% else %}{{ net.mode or '–' }}{% endif %}
+        {% if net.hotspot_password %}<br><br>When the home Wi-Fi is out of reach, the frame starts its own
         Wi-Fi “{{ net.hotspot_ssid }}” (password <code>{{ net.hotspot_password }}</code>);
         then open http://10.42.0.1:8080.{% endif %}
       </p>
-    </details>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Advanced</summary>
+        <label>Audio output
+          <select data-setting="audio_device" id="audio-device" data-current="{{ status.audio_device }}">
+            <option value="auto">Automatic (HDMI with display)</option>
+            {% if status.audio_device != 'auto' %}<option value="{{ status.audio_device }}" selected>{{ status.audio_device }}</option>{% endif %}
+          </select>
+        </label>
+        <label>Hardware decoding
+          <select data-setting="hwdec">
+            {% set modes = ['auto', 'auto-safe', 'v4l2m2m-copy', 'drm', 'no'] %}
+            {% for h in modes %}<option value="{{ h }}" {{ 'selected' if h == status.hwdec else '' }}>{{ 'Automatic (recommended)' if h == 'auto' else h }}</option>{% endfor %}
+            {% if status.hwdec not in modes %}<option selected>{{ status.hwdec }}</option>{% endif %}
+          </select>
+        </label>
+        <p class="hint" id="diag">
+          Decoder: <span id="hwdec-current">{{ status.player.hwdec_current or '–' }}</span> ·
+          Display: {{ status.player.display or '–' }} ·
+          Player restarts: {{ status.player.restarts if status.player.restarts is not none else '–' }}
+        </p>
+      </details>
+    </div>
+    <p class="footer-note">Frame {{ version }} · for use on your home network only</p>
   </section>
 </main>
 
-<footer>Frame {{ version }} · for use on your home network only</footer>
+<nav class="tabbar" aria-label="Sections">
+  <a href="#now" data-tab="now">{{ icon('frame') }}<span>Now</span></a>
+  <a href="#playlists" data-tab="playlists">{{ icon('lists') }}<span>Playlists</span></a>
+  <a href="#library" data-tab="library">{{ icon('grid') }}<span>Library</span></a>
+  <a href="#settings" data-tab="settings">{{ icon('gear') }}<span>Settings</span></a>
+</nav>
 </body>
 </html>
