@@ -297,3 +297,17 @@ def test_hang_while_loading_names_the_file_being_opened(env):
     assert d.visual.current == "a.mp4" and d.showing() == "b.mp4"
     d.initial()  # the supervisor restarts mpv
     assert d.showing() == "a.mp4"
+
+
+def test_jump_to_a_named_item(env):
+    d, _, _ = start(env, playlist=["a.mp4", "b.mp4", "c.png"], interval=600)
+    env.video.props["pause"] = True
+    env.cfg.run_dir.mkdir(parents=True, exist_ok=True)
+    (env.cfg.run_dir / "next-visual").write_text("c.png")
+    d.tick()
+    assert loads(env) == ["c.png"]
+    assert ("video", "set", "pause", False) in env.log  # a jump always plays
+    # A name that isn't in the list falls back to "next".
+    (env.cfg.run_dir / "next-visual").write_text("gone.mp4")
+    d.tick()
+    assert loads(env) == ["c.png", "a.mp4"]

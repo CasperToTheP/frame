@@ -35,6 +35,10 @@ class Config:
         return self.data_dir / "media"
 
     @property
+    def thumb_dir(self) -> Path:
+        return self.data_dir / "thumbs"
+
+    @property
     def incoming_dir(self) -> Path:
         # Same filesystem as media_dir so finished uploads can be renamed atomically.
         return self.media_dir / ".incoming"

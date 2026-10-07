@@ -71,6 +71,7 @@ function showView() {
     a.classList.toggle("active", active);
     if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
+  document.body.classList.toggle("on-now", name === "now");
 }
 window.addEventListener("hashchange", () => { showView(); scrollTo(0, 0); });
 showView();
@@ -80,37 +81,49 @@ try {
   if (saved && saved[0] === location.hash) requestAnimationFrame(() => scrollTo(0, saved[1]));
 } catch (_) {}
 
-// --- previews: videos load only their first frame, and only when visible ----
+// --- thumbnails ----------------------------------------------------------------
+// The frame makes thumbnails in the background. One that isn't ready yet answers
+// 404: keep the placeholder icon showing and try again a few times.
 
-const videoObserver = "IntersectionObserver" in window
-  ? new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (!e.isIntersecting) continue;
-      const v = e.target;
-      v.preload = "metadata";
-      v.src = v.dataset.src;
-      videoObserver.unobserve(v);
-    }
-  }, { rootMargin: "200px" })
-  : null;
-
-function watchVideos(root = document) {
-  for (const v of $$("video[data-src]", root)) {
-    if (videoObserver) videoObserver.observe(v);
-    else { v.preload = "metadata"; v.src = v.dataset.src; }
+function watchThumbs(root = document) {
+  for (const img of $$("img.tn", root)) {
+    if (img.dataset.watched) continue;
+    img.dataset.watched = "1";
+    if (!img.complete) img.classList.add("loading");
+    else if (!img.naturalWidth) retryThumb(img);
+    img.addEventListener("load", () => img.classList.remove("loading"));
+    img.addEventListener("error", () => retryThumb(img));
   }
 }
-watchVideos();
+
+function retryThumb(img) {
+  img.classList.add("loading");
+  const tries = Number(img.dataset.tries || 0);
+  if (tries >= 8) return; // give up: the icon stays
+  img.dataset.tries = String(tries + 1);
+  setTimeout(() => {
+    const url = new URL(img.src, location.href);
+    url.searchParams.set("try", String(tries + 1));
+    img.src = url.toString();
+  }, 3000 + tries * 2000);
+}
+watchThumbs();
 
 // Copies of a file's preview elements, taken from its Library tile.
 function previewOf(name) {
   const tile = name && document.querySelector(`[data-tile="${CSS.escape(name)}"] .tile-media`);
   if (!tile) return [];
-  return Array.from(tile.querySelectorAll(":scope > img, :scope > video, :scope > .ph"), (el) => {
+  return Array.from(tile.querySelectorAll(":scope > img, :scope > .ph"), (el) => {
     const copy = el.cloneNode(true);
-    if (copy.tagName === "VIDEO") copy.removeAttribute("src");
+    delete copy.dataset.watched;
     return copy;
   });
+}
+
+function setPreview(container, name) {
+  if (!container) return;
+  container.replaceChildren(...previewOf(name));
+  watchThumbs(container);
 }
 
 // --- now playing -------------------------------------------------------------
@@ -136,6 +149,10 @@ function renderCountdowns() {
   $("#countdown").textContent = fmtCountdown(v.next_at);
   $("#sound-countdown").textContent =
     (snd.count > 1 && snd.position ? ` · ${snd.position} of ${snd.count}` : "") + fmtCountdown(snd.next_at);
+  const where = v.count > 1 && v.position ? `${v.position} of ${v.count}` : "";
+  const label = { paused: "Paused", idle: "Black screen", "player offline": "Player offline" }[playback];
+  $("#mini-sub").textContent = [label, where, fmtCountdown(v.next_at).replace(" · ", "")]
+    .filter(Boolean).join(" · ") || (snd.current ? `♪ ${snd.current}` : "");
 }
 
 function setIcon(button, name) {
@@ -150,16 +167,20 @@ function renderStatus(s) {
   const current = nowState.visual?.current || null;
   $("#current").textContent = current || "Nothing — black screen";
   $("#sound-now").textContent = nowState.sound?.current || "Artwork's own sound";
+  $("#mini-title").textContent = current || "Black screen";
   if (current !== heroName) {
     heroName = current;
-    const hero = $("#hero-media");
-    hero.replaceChildren(...previewOf(current));
-    watchVideos(hero);
+    setPreview($("#hero-media"), current);
+    setPreview($("#mini-thumb"), current);
+    for (const item of $$("[data-jump]")) {
+      item.classList.toggle("current", item.dataset.jump === current);
+      if (item.dataset.jump === current) item.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+    }
   }
   const err = $("#player-error");
   err.textContent = nowState.error || "";
   err.hidden = !nowState.error;
-  $("#btn-next").disabled = !(nowState.visual?.count > 1);
+  $("#btn-next").disabled = $("#mini-next").disabled = !(nowState.visual?.count > 1);
   renderCountdowns();
   const labels = { playing: "Playing", paused: "Paused", idle: "Black screen",
                    "player offline": "Player offline", unknown: "…" };
@@ -174,11 +195,12 @@ function renderStatus(s) {
   mute.setAttribute("aria-label", s.muted ? "Unmute" : "Mute");
   setIcon(mute, s.muted ? "mute" : "vol");
 
-  const toggle = $("#btn-toggle");
   const paused = s.playback === "paused";
-  setIcon(toggle, paused ? "play" : "pause");
-  toggle.setAttribute("aria-label", paused ? "Play" : "Pause");
-  toggle.disabled = !["playing", "paused"].includes(s.playback);
+  for (const toggle of [$("#btn-toggle"), $("#mini-toggle")]) {
+    setIcon(toggle, paused ? "play" : "pause");
+    toggle.setAttribute("aria-label", paused ? "Play" : "Pause");
+    toggle.disabled = !["playing", "paused"].includes(s.playback);
+  }
 
   const vol = $("#volume");
   if (document.activeElement !== vol) {
@@ -212,6 +234,20 @@ for (const btn of $$("[data-action]")) {
     } else if (action === "toggle") {
       act("POST", playback === "paused" ? "/api/resume" : "/api/pause", {});
     }
+  });
+}
+
+// Up next: start scrolled to what's on the frame; tap a picture to show it now.
+const stripCurrent = $("#strip .current");
+if (stripCurrent) {
+  const strip = $("#strip");
+  strip.scrollLeft = stripCurrent.offsetLeft - (strip.clientWidth - stripCurrent.clientWidth) / 2;
+}
+for (const item of $$("[data-jump]")) {
+  item.addEventListener("click", () => {
+    if (item.classList.contains("current")) return;
+    for (const other of $$("[data-jump]")) other.classList.toggle("current", other === item);
+    act("POST", "/api/next", { which: "visual", filename: item.dataset.jump }, { ok: "Switching…" });
   });
 }
 
@@ -341,8 +377,7 @@ function openSheet(tile) {
   $("#sheet-warning").textContent = warning ? `⚠ ${warning}` : "";
   $("#sheet-warning").hidden = !warning;
   const thumb = $("#sheet-thumb");
-  thumb.replaceChildren(...previewOf(sheetName));
-  watchVideos(thumb);
+  setPreview(thumb, sheetName);
   $("#sheet-play span").textContent = audio ? "Play only this music" : "Show only this artwork";
   const list = $("#sheet-list");
   list.textContent = listed

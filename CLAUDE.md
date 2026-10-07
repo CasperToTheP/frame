@@ -99,9 +99,17 @@ Key rules:
   ones. "Active" is computed by comparing, never stored.
 - **The UI** is one server-rendered page with four tab views (`#now`, `#playlists`,
   `#library`, `#settings`) switched by `app.js`; actions save and reload the page, which
-  keeps the tab and scroll position. Previews are the original files from `/media/<name>`
-  (range requests, so a phone reads only a video's first frame, lazily). There are no
-  thumbnails on disk and no server-side image work.
+  keeps the tab and scroll position.
+- **Thumbnails** (`thumbs.py`): a 480 px JPEG per visual in `/var/lib/frame/thumbs`, made
+  by a short-lived `mpv --vo=image` (no ffmpeg on the Pi) in one background thread of the
+  web service, after upload and once at startup for files without one. Requests never
+  wait: `/thumb/<name>` answers 404 until it exists and the page retries. The mpv runs
+  at nice 19 with OOM score 1000 inside frame-web's MemoryMax, and the unit has
+  `OOMPolicy=continue`, so a huge file can only kill the thumbnailer. Failures are
+  remembered (`<name>.failed`) until the file changes. Phones can't be trusted to show a
+  video's first frame themselves (iOS shows nothing until it plays).
+- **Jumping**: a "next" request file may contain a filename; the Director then switches
+  straight to that item if it's in the list.
 - Uploads stream to `/var/lib/frame/media/.incoming/` (same filesystem as the media), are
   checked by extension and magic bytes, then renamed into place. waitress spools request
   bodies to `TMPDIR=/var/lib/frame/tmp`, never to RAM or tmpfs.
@@ -117,6 +125,7 @@ Key rules:
 | `/var/lib/frame/state.json` | persistent settings (see `state.DEFAULTS`) |
 | `/var/lib/frame/hang.json` | recent hang reboots and the file that was playing (written only by the player) |
 | `/var/lib/frame/tmp/` | waitress upload spool |
+| `/var/lib/frame/thumbs/` | thumbnails (`<name>.jpg`), made and cleaned up by frame-web |
 | `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
 | `/run/frame/audio.sock` | soundtrack mpv IPC socket |
 | `/run/frame/player.json` | supervisor health info and what's playing, read by the UI |

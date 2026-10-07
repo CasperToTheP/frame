@@ -370,3 +370,75 @@ details[open] summary { margin-bottom: 6px; }
 .saved-thumb, .hero-media { display: grid; }
 .hero-media { position: absolute; }
 .saved-thumb > .play-badge { grid-area: auto; }
+
+/* --- thumbnails ---------------------------------------------------------------
+   Every preview is a placeholder icon with the thumbnail image on top of it
+   (same grid cell). Until the thumbnail exists the image is hidden. */
+img.tn { width: 100%; height: 100%; object-fit: cover; display: block; grid-area: 1 / 1; opacity: 1; transition: opacity .25s; }
+img.tn.loading { opacity: 0; }
+.tile-meta .i.inline { width: 13px; height: 13px; margin-right: 4px; vertical-align: -2px; }
+
+/* --- Up next strip ------------------------------------------------------------ */
+.strip-card { padding-bottom: 12px; }
+.strip {
+  display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory;
+  margin: 0 -16px; padding: 2px 16px 6px; scrollbar-width: none;
+}
+.strip::-webkit-scrollbar { display: none; }
+.strip-item {
+  flex: none; width: 132px; scroll-snap-align: start;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 0; border: 0; background: none; text-align: left;
+}
+.strip-media {
+  position: relative; display: grid; overflow: hidden;
+  aspect-ratio: 16 / 10; border-radius: 12px; background: var(--surface-2);
+  border: 2px solid transparent; transition: transform .1s ease;
+}
+.strip-media > * { grid-area: 1 / 1; }
+.strip-item:active .strip-media { transform: scale(.96); }
+.strip-item .badge-play { display: none; top: 6px; right: 6px; }
+.strip-item.current .strip-media { border-color: var(--accent); }
+.strip-item.current .badge-play { display: inline-grid; }
+.strip-name { font-size: .8rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-item.current .strip-name { color: var(--text); font-weight: 600; }
+.strip-sound { margin: 8px 0 0; font-size: .85rem; }
+
+/* --- saved playlist cover: 2×2 mosaic -------------------------------------- */
+.saved-thumb.mosaic { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; }
+.saved-thumb .cell { display: grid; overflow: hidden; min-height: 0; }
+.saved-thumb .cell > * { grid-area: 1 / 1; }
+.saved-thumb.mosaic > .play-badge { grid-area: auto; }
+
+/* --- mini player (every tab except Now) ------------------------------------- */
+.mini {
+  position: fixed; z-index: 29; left: 8px; right: 8px;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 6px);
+  max-width: 744px; margin: 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 6px 6px 6px; border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+body.on-now .mini { display: none; }
+body:not(.on-now) { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 84px); }
+.mini-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
+.mini-thumb { flex: none; width: 48px; height: 48px; border-radius: 10px; overflow: hidden; display: grid; background: var(--surface); }
+.mini-thumb > * { grid-area: 1 / 1; }
+.mini-thumb .ph .i { width: 20px; height: 20px; }
+.mini-text { min-width: 0; display: flex; flex-direction: column; }
+.mini-title { font-weight: 700; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-sub { color: var(--muted); font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-btn {
+  flex: none; display: grid; place-items: center;
+  width: 44px; height: 44px; border-radius: 50%; border: 0;
+  background: transparent; color: var(--text);
+}
+#mini-toggle { background: var(--accent); color: var(--accent-text); }
+
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title-row .view-title { margin-bottom: 10px; }
+.upload-btn { min-height: 44px; padding: 8px 16px; }
+.upload .switch.compact { margin-top: 0; }
+.upload .hint { font-size: .8rem; }

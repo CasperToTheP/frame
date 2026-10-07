@@ -93,7 +93,7 @@ info "groups: $(id -nG "$FRAME_USER")"
 # --- directories --------------------------------------------------------------
 step "Creating data directories (existing media and settings are kept)"
 install -d -o "$FRAME_USER" -g "$FRAME_USER" -m 0750 \
-  "$DATA_DIR" "$DATA_DIR/media" "$DATA_DIR/media/.incoming" "$DATA_DIR/tmp"
+  "$DATA_DIR" "$DATA_DIR/media" "$DATA_DIR/media/.incoming" "$DATA_DIR/tmp" "$DATA_DIR/thumbs"
 # Fix ownership of files copied in by hand (e.g. scp as root). Never deletes.
 chown -R "$FRAME_USER:$FRAME_USER" "$DATA_DIR/media"
 [[ -f $DATA_DIR/state.json ]] && chown "$FRAME_USER:$FRAME_USER" "$DATA_DIR/state.json"

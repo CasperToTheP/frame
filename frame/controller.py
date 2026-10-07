@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any
 
@@ -33,6 +34,7 @@ from .player import (
     scale_filter,
 )
 from .state import SAVED_KEYS, StateStore, saved_name
+from .thumbs import Thumbnails
 
 log = logging.getLogger("frame.control")
 
@@ -48,6 +50,7 @@ class Controller:
         self.ipc = ipc or MpvIpc(cfg.mpv_socket)
         # The audio-only mpv that loops a separate soundtrack.
         self.audio_ipc = audio_ipc or MpvIpc(cfg.audio_socket)
+        self.thumbs = Thumbnails(self.library, cfg.thumb_dir, cfg.mpv_bin)
 
     # --- status -------------------------------------------------------------
 
@@ -193,13 +196,21 @@ class Controller:
         result = self.set_sounds({"items": [name] if name else []})
         return {k: v for k, v in result.items() if k == "warning"}
 
-    def next(self, which: str) -> dict[str, Any]:
-        """Skip to the next visual or sound now (with a fade)."""
+    def next(self, which: str, target: str | None = None) -> dict[str, Any]:
+        """Skip to the next visual or sound now (with a fade), or jump to ``target``,
+        which must be in that list."""
         request = {"visual": NEXT_VISUAL, "sound": NEXT_SOUND}.get(which)
         if request is None:
             raise MediaError("which must be 'visual' or 'sound'")
+        if target is not None:
+            items = self.state.load()["playlist" if which == "visual" else "sounds"]
+            if not isinstance(target, str) or target not in items:
+                raise MediaError("that file isn't in the list")
         self.cfg.run_dir.mkdir(parents=True, exist_ok=True)
-        (self.cfg.run_dir / request).touch()
+        path = self.cfg.run_dir / request
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(target or "", encoding="utf-8")
+        os.replace(tmp, path)  # the player never sees a half-written request
         return self._offline_warning()
 
     def stop(self) -> None:
@@ -218,6 +229,8 @@ class Controller:
         return [
             {"name": name, "count": len(entry["playlist"]), "sound_count": len(entry["sounds"]),
              "first": next(iter(self.library.playable(entry["playlist"], VISUAL_KINDS)), None),
+             # Up to four pictures for the cover.
+             "covers": self.library.playable(entry["playlist"], VISUAL_KINDS)[:4],
              # The one that's playing now, unless it's been edited since.
              "active": not state["blank"] and entry == current}
             for name, entry in state["saved"].items()
@@ -341,7 +354,8 @@ class Controller:
                  in_playlist=item.name in state["playlist"],
                  in_sounds=item.name in state["sounds"],
                  playing=item.name in (now["visual"]["current"], now["sound"]["current"]),
-                 warning=self.heavy_warning(item.name) if item.kind != "audio" else None)
+                 warning=self.heavy_warning(item.name) if item.kind != "audio" else None,
+                 thumb=self.thumbs.version(item.name) if item.kind != "audio" else None)
             for item in self.library.list()
         ]
 
@@ -371,6 +385,7 @@ class Controller:
         if saved != state["saved"]:
             self.state.update(saved=saved)
         self.library.delete(name)
+        self.thumbs.remove(name)
         log.info("deleted %s", name)
 
     # --- helpers ------------------------------------------------------------

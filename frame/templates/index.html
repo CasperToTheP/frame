@@ -35,6 +35,7 @@
   <symbol id="i-music" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></g></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></g></symbol>
   <symbol id="i-film" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></g></symbol>
+  <symbol id="i-gif" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/></g><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="system-ui,sans-serif" fill="currentColor">GIF</text></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></g></symbol>
 </svg>
@@ -42,12 +43,12 @@
 {% macro icon(name, cls='') -%}<svg class="i {{ cls }}" aria-hidden="true"><use href="#i-{{ name }}"/></svg>{%- endmacro %}
 
 {# A preview of a library file. Videos load lazily (app.js), and only their first frame. #}
+{# A thumbnail made on the frame (thumbs.py), over a placeholder icon that shows
+   until the thumbnail exists (app.js retries) or if it can't be made. #}
 {% macro preview(name) -%}
   {% set m = media_index.get(name) if name else none %}
-  {% if m and m.kind in ('image', 'animation') and m.size <= 15 * 1048576 %}
-    <img src="{{ url_for('media_file', name=m.name) }}" alt="" loading="lazy" decoding="async">
-  {% elif m and m.kind == 'video' %}
-    <span class="ph">{{ icon('film') }}</span><video muted playsinline preload="none" data-src="{{ url_for('media_file', name=m.name) }}#t=0.5"></video>
+  {% if m and m.kind != 'audio' %}
+    <span class="ph">{{ icon('film' if m.kind == 'video' else 'image') }}</span><img class="tn" src="{{ url_for('thumbnail', name=m.name, v=m.thumb) }}" alt="" loading="lazy" decoding="async">
   {% elif m and m.kind == 'audio' %}
     <span class="ph ph-audio">{{ icon('music') }}</span>
   {% else %}
@@ -140,6 +141,25 @@
       {{ saved_chips() }}
     </div>
 
+    {% set queue = status.playlist|select('in', media_index)|list %}
+    {% if queue and not status.blank %}
+    <div class="card strip-card">
+      <div class="card-head"><h2>{{ 'Up next' if queue|length > 1 else 'On the frame' }}</h2>
+        <span class="sub" id="strip-meta">{{ queue|length }} artwork{{ '' if queue|length == 1 else 's' }}{% if status.shuffle %} · shuffle{% endif %}</span></div>
+      <div class="strip" id="strip">
+        {% for name in queue %}
+        <button class="strip-item {{ 'current' if name == now.visual.current else '' }}" data-jump="{{ name }}" aria-label="Show {{ name }} now">
+          <span class="strip-media">{{ preview(name) }}<span class="badge badge-play">Now</span></span>
+          <span class="strip-name">{{ name }}</span>
+        </button>
+        {% endfor %}
+      </div>
+      {% if status.sounds %}
+      <p class="sub strip-sound">{{ icon('music', 'inline') }}{{ status.sounds|length }} track{{ '' if status.sounds|length == 1 else 's' }} playing over it{% if status.sound_shuffle %} · shuffle{% endif %}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="row-buttons">
       {% if status.blank %}
       <button class="btn primary wide" data-action="start">{{ icon('play') }}Start the frame</button>
@@ -160,7 +180,9 @@
         {% for p in status.saved %}
         <div class="saved-card {{ 'active' if p.active else '' }}">
           <button class="saved-main" data-load="{{ p.name }}" aria-label="Play {{ p.name }}">
-            <span class="saved-thumb">{{ preview(p.first) }}<span class="play-badge">{{ icon('check' if p.active else 'play') }}</span></span>
+            <span class="saved-thumb {{ 'mosaic' if p.covers|length >= 4 else '' }}">
+              {% if p.covers|length >= 4 %}{% for c in p.covers %}<span class="cell">{{ preview(c) }}</span>{% endfor %}{% else %}{{ preview(p.first) }}{% endif %}
+              <span class="play-badge">{{ icon('check' if p.active else 'play') }}</span></span>
             <span class="saved-name">{{ p.name }}</span>
             <span class="saved-meta">{{ p.count }} artwork{{ '' if p.count == 1 else 's' }}{% if p.sound_count %} · {{ p.sound_count }} track{{ '' if p.sound_count == 1 else 's' }}{% endif %}{% if p.active %} · playing{% endif %}</span>
           </button>
@@ -207,16 +229,17 @@
 
   {# ============================ LIBRARY ============================ #}
   <section class="view" id="view-library" data-view="library" hidden aria-label="Library">
-    <h1 class="view-title">Library <span class="count">{{ media|length }}</span></h1>
-
     <form id="upload-form" class="upload">
-      <label class="btn primary wide upload-btn">
-        {{ icon('upload') }}<span>Upload files</span>
-        <input type="file" name="file" id="file" accept="{{ accept }}" multiple hidden>
-      </label>
-      <label class="switch compact"><span>Add to playlist / sound</span><input type="checkbox" name="add" value="1" checked><span class="track"></span></label>
+      <div class="title-row">
+        <h1 class="view-title">Library <span class="count">{{ media|length }}</span></h1>
+        <label class="btn primary upload-btn">
+          {{ icon('upload') }}<span>Upload</span>
+          <input type="file" name="file" id="file" accept="{{ accept }}" multiple hidden>
+        </label>
+      </div>
+      <label class="switch compact"><span>Add uploads to the playlist / sound</span><input type="checkbox" name="add" value="1" checked><span class="track"></span></label>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p class="hint">Videos (MP4 works best), GIFs, images (JPG, PNG, WebP, SVG…) and music (MP3, M4A, WAV, FLAC…). Max {{ max_upload_mb }} MB each.</p>
+      <p class="hint">Video (MP4 works best), GIF, images incl. SVG, and music. Up to {{ max_upload_mb // 1024 if max_upload_mb >= 1024 else max_upload_mb }} {{ 'GB' if max_upload_mb >= 1024 else 'MB' }} per file.</p>
     </form>
 
     {% if media %}
@@ -236,7 +259,7 @@
           {% if m.warning %}<span class="badge badge-warn" title="{{ m.warning }}">!</span>{% endif %}
         </span>
         <span class="tile-name">{{ m.name }}</span>
-        <span class="tile-meta">{{ {'video': 'Video', 'animation': 'GIF', 'image': 'Image', 'audio': 'Music'}[m.kind] }} · {{ (m.size / 1048576) | round(1) }} MB</span>
+        <span class="tile-meta">{{ icon({'video': 'film', 'animation': 'gif', 'image': 'image', 'audio': 'music'}[m.kind], 'inline') }}{{ {'video': 'Video', 'animation': 'GIF', 'image': 'Image', 'audio': 'Music'}[m.kind] }} · {{ (m.size / 1048576) | round(1) }} MB</span>
         {% if m.warning %}<span class="warn-text">May be too heavy for the Pi</span>{% endif %}
       </button>
       {% endfor %}
@@ -319,6 +342,17 @@
     <p class="footer-note">Frame {{ version }} · for use on your home network only</p>
   </section>
 </main>
+
+{# Mini player: shows what's on the frame from every tab except Now. #}
+<div class="mini" id="mini">
+  <a class="mini-main" href="#now">
+    <span class="mini-thumb" id="mini-thumb">{{ preview(now.visual.current) }}</span>
+    <span class="mini-text"><span class="mini-title" id="mini-title">{{ now.visual.current or 'Black screen' }}</span>
+      <span class="mini-sub" id="mini-sub"></span></span>
+  </a>
+  <button class="mini-btn" id="mini-toggle" data-action="toggle" aria-label="Pause">{{ icon('pause') }}</button>
+  <button class="mini-btn" id="mini-next" data-next="visual" aria-label="Next artwork" {{ '' if now.visual.count > 1 else 'disabled' }}>{{ icon('next') }}</button>
+</div>
 
 <nav class="tabbar" aria-label="Sections">
   <a href="#now" data-tab="now">{{ icon('frame') }}<span>Now</span></a>

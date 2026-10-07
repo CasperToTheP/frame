@@ -74,6 +74,33 @@ class FakeIpc:
         self.props["idle-active"] = False
 
 
+# A tiny valid JPEG, written by the stand-in thumbnail maker below.
+JPEG = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c140d0c0b0b0c"
+    "1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b"
+    "080001000101011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b510"
+    "0002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1"
+    "f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a6364656667"
+    "68696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2"
+    "c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00"
+    "fbd3ffd9"
+)
+
+
+@pytest.fixture(autouse=True)
+def fake_thumbnailer(monkeypatch):
+    """Don't run a real mpv for thumbnails in unit tests; pretend it worked."""
+    made = []
+
+    def run(args):
+        outdir = next(a.split("=", 1)[1] for a in args if a.startswith("--vo-image-outdir="))
+        made.append(args[-1])
+        Path(outdir, "00000001.jpg").write_bytes(JPEG)
+
+    monkeypatch.setattr("frame.thumbs.run_mpv", run)
+    return made
+
+
 @pytest.fixture
 def cfg(tmp_path) -> Config:
     return Config(

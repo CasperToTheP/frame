@@ -81,6 +81,9 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
 
     ctl.library.ensure_dirs()
     ctl.library.clean_incoming()
+    # Thumbnails for files that don't have one yet are made in the background.
+    ctl.thumbs.clean()
+    ctl.thumbs.request(item.name for item in ctl.library.list())
 
     @app.before_request
     def check_access():
@@ -148,6 +151,21 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             version=__version__,
         )
 
+    @app.get("/thumb/<path:name>")
+    def thumbnail(name: str):
+        ctl.library.resolve(name)  # 400/404 for bad or missing names
+        path = ctl.thumbs.ready(name)
+        if path is None:
+            ctl.thumbs.request([name])
+            # Not made yet (or impossible): the page shows a placeholder and retries.
+            response = jsonify(error="no thumbnail yet",
+                               pending=not ctl.thumbs.failed(name))
+            response.status_code = 404
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        # The URL carries ?v=<file mtime>, so it can be cached for long.
+        return send_file(path, mimetype="image/jpeg", conditional=True, max_age=30 * 86400)
+
     @app.get("/media/<path:name>")
     def media_file(name: str):
         # The original file, for previews in the UI. Range requests let a phone
@@ -189,6 +207,7 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             name = ctl.library.add(tmp, storage.filename or "")
             log.info("uploaded %s (%d bytes)", name, (cfg.media_dir / name).stat().st_size)
             saved.append(name)
+        ctl.thumbs.request(saved)
         result: dict[str, Any] = {"saved": saved}
         heavy = []
         for name in saved:
@@ -268,7 +287,9 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     @app.post("/api/next")
     def api_next():
         # {"which": "visual"} or {"which": "sound"}
-        return jsonify(ok=True, **ctl.next(_json_body().get("which", "visual")))
+        # Optional "filename": jump straight to that item of the list.
+        body = _json_body()
+        return jsonify(ok=True, **ctl.next(body.get("which", "visual"), body.get("filename")))
 
     @app.post("/api/stop")
     def api_stop():

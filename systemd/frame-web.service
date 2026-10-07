@@ -18,6 +18,10 @@ Restart=always
 RestartSec=3
 # Leave room for the player if something goes wrong in the web app.
 MemoryMax=250M
+# Thumbnails are made by a short-lived mpv in this cgroup, with a raised OOM
+# score. If a huge file runs it out of memory, only that mpv is killed: keep
+# the web UI running instead of stopping the whole service.
+OOMPolicy=continue
 Nice=5
 
 NoNewPrivileges=yes

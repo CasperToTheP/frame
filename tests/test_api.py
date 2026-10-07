@@ -61,7 +61,7 @@ def test_upload_list_and_no_autoplay(client, ipc, cfg):
     assert media == [
         {"name": "Sea_Waves.mp4", "kind": "video", "size": len(MP4),
          "mtime": media[0]["mtime"], "in_playlist": False, "in_sounds": False,
-         "playing": False, "warning": None}
+         "playing": False, "warning": None, "thumb": int(media[0]["mtime"])}
     ]
     assert list(cfg.incoming_dir.iterdir()) == []
 
@@ -526,4 +526,34 @@ def test_page_has_tabs_saved_chips_and_previews(client):
     for view in ("now", "playlists", "library", "settings"):
         assert f'data-view="{view}"' in html and f'href="#{view}"' in html
     assert 'data-load="Sleeping"' in html
-    assert 'data-src="/media/a.mp4#t=0.5"' in html and 'src="/media/b.png"' in html
+    assert 'src="/thumb/a.mp4?v=' in html and 'src="/thumb/b.png?v=' in html
+    assert 'data-jump="a.mp4"' in html and 'id="mini"' in html
+
+
+def test_thumbnails(client, ctl, fake_thumbnailer):
+    from .conftest import JPEG
+
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "s.mp3", MP3)
+    ctl.thumbs.wait()
+    res = client.get("/thumb/a.mp4?v=1")
+    assert res.status_code == 200 and res.data == JPEG
+    assert res.headers["Content-Type"] == "image/jpeg"
+    assert "max-age" in res.headers["Cache-Control"]
+    assert client.get("/thumb/s.mp3").status_code == 404      # music has none
+    assert client.get("/thumb/nope.mp4").status_code == 404
+    assert client.get("/thumb/..%2Fstate.json").status_code in (400, 404)
+    # Deleting the file deletes its thumbnail.
+    client.delete("/api/media/a.mp4")
+    assert not ctl.thumbs.path("a.mp4").exists()
+
+
+def test_jump_to_an_item(client, cfg):
+    post_file(client, "a.mp4", MP4, add="1")
+    post_file(client, "b.png", PNG, add="1")
+    def jump(name):
+        return client.post("/api/next", json={"which": "visual", "filename": name})
+
+    assert jump("b.png").status_code == 200
+    assert (cfg.run_dir / "next-visual").read_text() == "b.png"
+    assert jump("x.png").status_code == 400

@@ -155,11 +155,20 @@ screen; it then opens like an app.
 
 The tab bar at the bottom has four screens:
 - **Now**: what's on the frame (with a preview), play/pause, next, mute, volume, your saved
-  playlists as one-tap buttons, and **Black screen**.
+  playlists as one-tap buttons, an **Up next** strip of the playlist (tap a picture to show
+  it now), and **Black screen**.
 - **Playlists**: your saved playlists, and the current artwork and sound lists.
 - **Library**: every file as a preview grid. Tap one for **Play now**,
   **Add to / Remove from playlist** and **Delete**. Filter by *Artwork* or *Music*.
 - **Settings**: display, network and advanced options.
+
+On every screen except **Now**, a mini player above the tab bar shows what's on the frame,
+with pause and next.
+
+**Thumbnails.** The frame makes a small picture of each video, GIF and image (a frame 10%
+into a video) right after it's uploaded, in the background. For files that were already
+there, it makes them once after updating; that takes a few seconds per file on a Pi 4, and
+the placeholder icons fill in as they're ready. They're stored in `/var/lib/frame/thumbs`.
 
 ### Saved playlists
 Save what's playing under a name — “Sleeping”, “Morning”, “Party” — and switch between
@@ -287,12 +296,13 @@ The UI uses a small JSON API that you can also script against:
 | `POST /api/playlist` | any of `{"items": [...], "interval": 300, "shuffle": false}` | the visual playlist; `interval` in seconds, `0` = full length |
 | `POST /api/sounds` | any of `{"items": [...], "interval": 0, "shuffle": false}` | the sound list; `[]` = artwork's own sound, `interval` `0` = whole track |
 | `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play only this audio file / back to the artwork's own sound |
-| `POST /api/next` | `{"which": "visual"}` or `{"which": "sound"}` | skip to the next item now |
+| `POST /api/next` | `{"which": "visual"}` or `{"which": "sound"}`, optional `"filename"` | skip to the next item now, or jump to that item of the list |
 | `POST /api/stop` / `POST /api/start` | | black screen (keeps the playlist) / start again |
 | `POST /api/saved` | `{"name": "Sleeping"}` | save the current playlist, sounds and their settings under a name (replaces one with that name) |
 | `POST /api/saved/load` | `{"name": "Sleeping"}` | play a saved playlist |
 | `DELETE /api/saved/<name>` | | delete a saved playlist |
-| `GET /media/<name>` | | the file itself (previews in the UI; supports range requests) |
+| `GET /media/<name>` | | the file itself (supports range requests) |
+| `GET /thumb/<name>` | | a 480 px JPEG thumbnail of a visual (404 until it has been made) |
 | `POST /api/pause` / `POST /api/resume` | | pause / resume |
 | `POST /api/volume` | `{"volume": 60}` | volume 0–100 |
 | `POST /api/mute` | `{"muted": true}` or `{}` to toggle | mute |

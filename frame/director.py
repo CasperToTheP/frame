@@ -155,10 +155,13 @@ class Director:
         try:
             if self._reload_state():
                 self._reconcile()
-            if self._take_request(NEXT_VISUAL):
-                self._advance(self.visual)
-            if self._take_request(NEXT_SOUND):
-                self._advance(self.sound)
+            # A request file may name the item to jump to; empty means "the next one".
+            target = self._take_request(NEXT_VISUAL)
+            if target is not None:
+                self._advance(self.visual, target)
+            target = self._take_request(NEXT_SOUND)
+            if target is not None:
+                self._advance(self.sound, target)
             paused = bool(self.ipc.get("pause", False))
             if paused != self.paused:
                 self.paused = paused
@@ -193,7 +196,11 @@ class Director:
             return float(duration)
         return None  # not known yet; ask again next tick
 
-    def _advance(self, ch: Channel) -> None:
+    def _advance(self, ch: Channel, target: str | None = None) -> None:
+        if target and target in ch.playable():
+            if target != ch.current:
+                self._switch(ch, target, user_choice=True)
+            return
         shuffle = self.state["shuffle" if ch is self.visual else "sound_shuffle"]
         name = self._next(ch, shuffle)
         if name and name != ch.current:
@@ -244,15 +251,18 @@ class Director:
             if name != ch.current:
                 self._switch(ch, name, user_choice=True)
 
-    def _take_request(self, name: str) -> bool:
+    def _take_request(self, name: str) -> str | None:
+        """The content of a pending request file ("" if empty), or None if there is none."""
+        path = self.cfg.run_dir / name
         try:
-            os.unlink(self.cfg.run_dir / name)
-            return True
+            content = path.read_text(encoding="utf-8", errors="replace").strip()
+            path.unlink()
+            return content
         except FileNotFoundError:
-            return False
+            return None
         except OSError as exc:
             log.warning("could not read request %s: %s", name, exc)
-            return False
+            return None
 
     # --- switching and fading -------------------------------------------------
 
