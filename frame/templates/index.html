@@ -297,7 +297,7 @@
         </select>
       </label>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
-      <p class="hint">Video (MP4 works best), GIF, images incl. SVG, and music. Up to {{ max_upload_mb // 1024 if max_upload_mb >= 1024 else max_upload_mb }} {{ 'GB' if max_upload_mb >= 1024 else 'MB' }} per file.</p>
+      <p class="hint">Video (MP4 works best), GIF / GIFV, images incl. SVG, and music. Up to {{ max_upload_mb // 1024 if max_upload_mb >= 1024 else max_upload_mb }} {{ 'GB' if max_upload_mb >= 1024 else 'MB' }} per file.</p>
     </form>
 
     {% if media %}

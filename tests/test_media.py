@@ -187,3 +187,19 @@ def test_playable_filters_kind_and_missing(lib):
     names = ["song.mp3", "gone.mp4", "a.mp4"]
     assert lib.playable(names, ("video", "image")) == ["a.mp4"]
     assert lib.playable(names, ("audio",)) == ["song.mp3"]
+
+
+@pytest.mark.parametrize("data, saved", [(MP4, "cat.mp4"), (MKV, "cat.webm")])
+def test_gifv_is_saved_as_the_video_inside(lib, data, saved):
+    assert upload(lib, "cat.gifv", data) == saved
+    assert [i.kind for i in lib.list()] == ["video"]
+
+
+def test_gifv_web_page_is_refused_with_advice(lib):
+    f = lib.new_incoming_file()
+    f.write(b"<!DOCTYPE html><html><head><title>imgur</title>")
+    f.close()
+    with pytest.raises(MediaError, match="web page") as e:
+        lib.add(f.name, "cat.gifv")
+    assert e.value.status == 415
+    assert not os.path.exists(f.name)

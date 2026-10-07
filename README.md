@@ -325,6 +325,7 @@ Example: `curl -X POST -H 'Content-Type: application/json' -d '{"volume":40}' ht
 | Kind | Formats | Notes |
 |---|---|---|
 | Video | `.mp4` (recommended), `.m4v`, `.mov`, `.mkv`, `.webm` | Loops forever. H.264 is decoded in hardware; see below. |
+| GIF video | `.gifv` | Saved as the `.mp4` or `.webm` video it really is. If the download turned out to be the web page instead, change `.gifv` to `.mp4` in the link and save that. |
 | Animation | `.gif` | Loops forever, including transparent GIFs. |
 | Image | `.jpg`, `.png`, `.webp`, `.bmp`, `.tif`/`.tiff` | Stays on screen. Transparency is shown on black. |
 | Vector image | `.svg` | Converted to a sharp PNG (1920 px on the longest side) when uploaded. |

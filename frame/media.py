@@ -25,6 +25,8 @@ EXTENSIONS = {
     ".m4v": "video",
     ".mkv": "video",
     ".webm": "video",
+    # Imgur-style "GIF video": really an MP4 or WebM. Renamed on upload (see add()).
+    ".gifv": "video",
     ".mov": "video",
     ".gif": "animation",
     ".jpg": "image",
@@ -152,6 +154,28 @@ def rasterize_svg(src: Path, dst: Path) -> None:
     render("--keep-aspect-ratio", side, str(SVG_RENDER_SIZE))
 
 
+def gifv_real_ext(path: Path) -> str:
+    """What a .gifv upload really is: ".mp4" or ".webm", or MediaError.
+
+    A .gifv is a short video named like a GIF. Saving one from a browser
+    sometimes saves the web page around it instead, so say how to get the video.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512)
+    except OSError as exc:
+        raise MediaError("upload could not be read") from exc
+    if head[4:8] == b"ftyp":
+        return ".mp4"
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    if b"<html" in head.lower() or b"<!doctype" in head.lower():
+        raise MediaError(
+            "this .gifv is a web page, not the video. Change “.gifv” to “.mp4” at the end "
+            "of the link, open that, and save the video", 415)
+    raise MediaError("this .gifv doesn't contain an MP4 or WebM video", 415)
+
+
 def sniff_ok(path: Path, ext: str) -> bool:
     """Cheap magic-number check so obviously wrong files are rejected at upload."""
     try:
@@ -273,6 +297,9 @@ class MediaLibrary:
         try:
             name = safe_name(raw_name)
             ext = os.path.splitext(name)[1]
+            if ext == ".gifv":
+                ext = gifv_real_ext(tmp_path)
+                name = name[: -len(".gifv")] + ext
             if os.path.getsize(tmp_path) == 0:
                 raise MediaError("uploaded file is empty")
             if not sniff_ok(tmp_path, ext):
