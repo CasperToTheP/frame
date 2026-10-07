@@ -61,6 +61,9 @@ DEFAULTS: dict[str, Any] = {
     # Each holds the SAVED_KEYS. The player ignores these; loading one copies it over
     # the live settings above.
     "saved": {},
+    # The saved playlist that's playing (its edits also go to the frame), or None
+    # when what's playing isn't a saved playlist (e.g. "Play now" on one file).
+    "active": None,
 }
 
 
@@ -113,6 +116,9 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
                 raise StateError(f"scaling must be one of {', '.join(SCALING_MODES)}")
         elif key == "saved":
             value = _validate_saved(value)
+        elif key == "active":
+            if value is not None:
+                value = saved_name(value)
         elif key in ("audio_device", "hwdec"):
             if not isinstance(value, str) or not value or "\n" in value:
                 raise StateError(f"{key} must be a non-empty string")

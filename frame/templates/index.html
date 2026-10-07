@@ -14,7 +14,8 @@
 {% set now = status.now %}
 <body data-now="{{ now|tojson|forceescape }}"
       data-kinds="{{ kinds|tojson|forceescape }}"
-      data-saved="{{ status.saved|map(attribute='name')|list|tojson|forceescape }}">
+      data-saved="{{ status.saved|map(attribute='name')|list|tojson|forceescape }}"
+      data-live="{{ (status.playlist + status.sounds)|tojson|forceescape }}">
 
 {# --- icons ------------------------------------------------------------------ #}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -56,24 +57,25 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro interval_select(id, options, value) -%}
-  <select id="{{ id }}">
+{% macro interval_select(id, options, value, attrs='') -%}
+  <select {% if id %}id="{{ id }}"{% endif %} {{ attrs|safe }}>
     {% for secs, label in options %}<option value="{{ secs }}" {{ 'selected' if secs == value else '' }}>{{ label }}</option>{% endfor %}
     {% if value not in options|map('first')|list %}<option value="{{ value }}" selected>{{ value }} seconds</option>{% endif %}
   </select>
 {%- endmacro %}
 
-{% macro item_list(id, items, now_name, empty_text) -%}
+{# The artwork or sound list of a saved playlist, in its editor. #}
+{% macro edit_list(field, items, now_name, empty_text) -%}
   {% if items %}
-  <ol class="queue" id="{{ id }}-items">
+  <ol class="queue">
     {% for name in items %}
     <li class="{{ 'playing' if name == now_name else '' }}">
       <span class="thumb">{{ preview(name) }}</span>
-      <span class="q-name">{{ name }}{% if name == now_name %}<small>Playing now</small>{% endif %}</span>
+      <span class="q-name">{{ name }}{% if name == now_name %}<small>On the frame now</small>{% endif %}{% if name not in media_index %}<small class="warn">File missing</small>{% endif %}</span>
       <span class="q-actions">
-        <button class="icon-btn" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>{{ icon('up') }}</button>
-        <button class="icon-btn" data-move="{{ id }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>{{ icon('down') }}</button>
-        <button class="icon-btn danger" data-remove="{{ id }}" data-index="{{ loop.index0 }}" aria-label="Remove {{ name }} from the list">{{ icon('x') }}</button>
+        <button class="icon-btn" data-ed-move="{{ field }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>{{ icon('up') }}</button>
+        <button class="icon-btn" data-ed-move="{{ field }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>{{ icon('down') }}</button>
+        <button class="icon-btn danger" data-ed-remove="{{ field }}" data-index="{{ loop.index0 }}" aria-label="Remove {{ name }} from this playlist">{{ icon('x') }}</button>
       </span>
     </li>
     {% endfor %}
@@ -83,15 +85,24 @@
   {% endif %}
 {%- endmacro %}
 
+{% macro cover(p) -%}
+  <span class="saved-thumb {{ 'mosaic' if p.covers|length >= 4 else '' }}">
+    {% if p.covers|length >= 4 %}{% for c in p.covers %}<span class="cell">{{ preview(c) }}</span>{% endfor %}{% else %}{{ preview(p.first) }}{% endif %}
+  </span>
+{%- endmacro %}
+
+{% set unsaved_now = status.active is none and status.playlist and not status.blank %}
+
 {# Saved playlists as one-tap chips. #}
 {% macro saved_chips() -%}
   <div class="chips" role="list">
-    {% for p in status.saved %}
-    <button class="chip {{ 'active' if p.active else '' }}" data-load="{{ p.name }}" role="listitem">
-      {% if p.active %}{{ icon('check') }}{% endif %}{{ p.name }}
+    {% for p in status.saved if p.count %}
+    <button class="chip {{ 'active' if p.playing else '' }}" data-load="{{ p.name }}" role="listitem">
+      {% if p.playing %}{{ icon('check') }}{% endif %}{{ p.name }}
     </button>
     {% endfor %}
-    <button class="chip chip-add" data-save>{{ icon('plus') }}Save current</button>
+    {% if unsaved_now %}<button class="chip chip-add" data-save>{{ icon('plus') }}Save what's playing</button>{% endif %}
+    <a class="chip chip-add" href="#playlists">{{ icon('lists') }}All playlists</a>
   </div>
 {%- endmacro %}
 
@@ -171,61 +182,103 @@
 
   {# ============================ PLAYLISTS ============================ #}
   <section class="view" id="view-playlists" data-view="playlists" hidden aria-label="Playlists">
-    <h1 class="view-title">Playlists</h1>
+    <div class="title-row">
+      <h1 class="view-title">Playlists</h1>
+      <button class="btn primary" data-new-playlist>{{ icon('plus') }}New</button>
+    </div>
+    <p class="hint lead">Build and edit playlists here without changing the frame. Tap <strong>▶</strong> to play one.</p>
+
+    {% if unsaved_now %}
+    <div class="card unsaved">
+      <div class="card-head"><h2>Playing now — not saved</h2><button class="btn small" data-save>{{ icon('plus') }}Save as playlist</button></div>
+      <p class="sub">{{ status.playlist|length }} artwork{{ '' if status.playlist|length == 1 else 's' }}{% if status.sounds %} · {{ status.sounds|length }} track{{ '' if status.sounds|length == 1 else 's' }}{% endif %}. Save it to keep it and edit it later.</p>
+    </div>
+    {% endif %}
+
+    {% if status.saved %}
+    <div class="saved-grid">
+      {% for p in status.saved %}
+      <div class="saved-card {{ 'active' if p.playing else '' }}">
+        <div class="cover-wrap">
+          <a href="#edit/{{ p.name|urlencode }}" aria-label="Edit {{ p.name }}">{{ cover(p) }}</a>
+          <button class="play-badge" data-load="{{ p.name }}" aria-label="Play {{ p.name }}" {{ '' if p.count else 'disabled' }}>{{ icon('check' if p.playing else 'play') }}</button>
+        </div>
+        <a class="saved-main" href="#edit/{{ p.name|urlencode }}">
+          <span class="saved-name">{{ p.name }}</span>
+          <span class="saved-meta">{% if p.playing %}<strong class="playing-label">Playing · </strong>{% endif %}{{ p.count }} artwork{{ '' if p.count == 1 else 's' }}{% if p.sound_count %} · {{ p.sound_count }} track{{ '' if p.sound_count == 1 else 's' }}{% endif %}</span>
+        </a>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card"><p class="empty">No playlists yet. Tap <strong>New</strong>, give it a name — like “Sleeping” — and add artwork and music to it.</p></div>
+    {% endif %}
+  </section>
+
+  {# One editor per saved playlist, opened from the grid above (#edit/<name>). #}
+  {% for p in status.saved %}
+  <section class="view editor" data-view="edit/{{ p.name }}" data-playlist="{{ p.name }}"
+           data-items="{{ p['items']|tojson|forceescape }}" data-sounds="{{ p.sounds|tojson|forceescape }}" hidden
+           aria-label="Edit {{ p.name }}">
+    <a class="back" href="#playlists">{{ icon('up', 'back-icon') }}Playlists</a>
+    <div class="editor-head">
+      {{ cover(p) }}
+      <div class="editor-titles">
+        <h1 class="view-title">{{ p.name }}</h1>
+        <p class="sub">{{ p.count }} artwork{{ '' if p.count == 1 else 's' }}{% if p.sound_count %} · {{ p.sound_count }} track{{ '' if p.sound_count == 1 else 's' }}{% endif %}</p>
+      </div>
+    </div>
+    {% if p.playing %}
+    <p class="notice">{{ icon('check', 'inline') }}Playing now — changes show on the frame right away.</p>
+    {% else %}
+    <button class="btn primary wide" data-load="{{ p.name }}" {{ '' if p.count else 'disabled' }}>{{ icon('play') }}Play “{{ p.name }}”</button>
+    {% endif %}
 
     <div class="card">
-      <div class="card-head"><h2>Saved</h2><button class="btn small" data-save>{{ icon('plus') }}Save current</button></div>
-      {% if status.saved %}
-      <div class="saved-grid">
-        {% for p in status.saved %}
-        <div class="saved-card {{ 'active' if p.active else '' }}">
-          <button class="saved-main" data-load="{{ p.name }}" aria-label="Play {{ p.name }}">
-            <span class="saved-thumb {{ 'mosaic' if p.covers|length >= 4 else '' }}">
-              {% if p.covers|length >= 4 %}{% for c in p.covers %}<span class="cell">{{ preview(c) }}</span>{% endfor %}{% else %}{{ preview(p.first) }}{% endif %}
-              <span class="play-badge">{{ icon('check' if p.active else 'play') }}</span></span>
-            <span class="saved-name">{{ p.name }}</span>
-            <span class="saved-meta">{{ p.count }} artwork{{ '' if p.count == 1 else 's' }}{% if p.sound_count %} · {{ p.sound_count }} track{{ '' if p.sound_count == 1 else 's' }}{% endif %}{% if p.active %} · playing{% endif %}</span>
-          </button>
-          <button class="icon-btn corner" data-delete-saved="{{ p.name }}" aria-label="Delete saved playlist {{ p.name }}">{{ icon('x') }}</button>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="empty">Nothing saved yet. Set up the artwork and sound below, then tap <strong>Save current</strong> and give it a name.</p>
-      {% endif %}
-    </div>
-
-    <div class="card" id="playlist" data-items="{{ status.playlist|tojson|forceescape }}">
-      <div class="card-head"><h2>Artwork <span class="count">{{ status.playlist|length }}</span></h2>
-        {% if now.visual.count > 1 %}<button class="btn small" data-next="visual">{{ icon('next') }}Next</button>{% endif %}</div>
-      {{ item_list('playlist', status.playlist, now.visual.current,
-                   'Empty. Open the Library and tap a file to add it.') }}
+      <div class="card-head"><h2>Artwork <span class="count">{{ p.count }}</span></h2>
+        <button class="btn small" data-pick="items">{{ icon('plus') }}Add artwork</button></div>
+      {{ edit_list('items', p['items'], now.visual.current if p.playing else none,
+                   'No artwork yet. Tap Add artwork to choose from the Library.') }}
       <div class="options">
-        <label>Change every {{ interval_select('interval', intervals, status.interval) }}</label>
+        <label>Change every {{ interval_select('', intervals, p.interval, 'data-ed-field="interval"') }}</label>
         <label>Fade between items
-          <select data-setting="fade">
-            {% for f in fades %}<option value="{{ f }}" {{ 'selected' if f == status.fade else '' }}>{{ 'Off' if f == 0 else f ~ ' s' }}</option>{% endfor %}
-            {% if status.fade not in fades %}<option value="{{ status.fade }}" selected>{{ status.fade }} s</option>{% endif %}
+          <select data-ed-field="fade">
+            {% for f in fades %}<option value="{{ f }}" {{ 'selected' if f == p.fade else '' }}>{{ 'Off' if f == 0 else f ~ ' s' }}</option>{% endfor %}
+            {% if p.fade not in fades %}<option value="{{ p.fade }}" selected>{{ p.fade }} s</option>{% endif %}
           </select>
         </label>
-        <label class="switch"><span>Shuffle</span><input type="checkbox" id="shuffle" {{ 'checked' if status.shuffle else '' }}><span class="track"></span></label>
+        <label class="switch"><span>Shuffle</span><input type="checkbox" data-ed-field="shuffle" {{ 'checked' if p.shuffle else '' }}><span class="track"></span></label>
       </div>
     </div>
 
-    <div class="card" id="sounds" data-items="{{ status.sounds|tojson|forceescape }}">
-      <div class="card-head"><h2>Sound <span class="count">{{ status.sounds|length }}</span></h2>
-        {% if status.sounds|length > 1 %}<button class="btn small" data-next="sound">{{ icon('next') }}Next track</button>{% endif %}</div>
-      {{ item_list('sounds', status.sounds, now.sound.current,
-                   "Each artwork plays its own sound. Add music from the Library to play it instead — it loops on its own.") }}
-      {% if status.sounds %}
+    <div class="card">
+      <div class="card-head"><h2>Sound <span class="count">{{ p.sound_count }}</span></h2>
+        <button class="btn small" data-pick="sounds">{{ icon('plus') }}Add music</button></div>
+      {{ edit_list('sounds', p.sounds, now.sound.current if p.playing else none,
+                   "Each artwork plays its own sound. Add music to play it instead — it loops on its own.") }}
+      {% if p.sounds %}
       <div class="options">
-        <label>Change track {{ interval_select('sound-interval', sound_intervals, status.sound_interval) }}</label>
-        <label class="switch"><span>Shuffle</span><input type="checkbox" id="sound-shuffle" {{ 'checked' if status.sound_shuffle else '' }}><span class="track"></span></label>
-        <button class="btn ghost wide" id="btn-own-sound">Use each artwork's own sound</button>
+        <label>Change track {{ interval_select('', sound_intervals, p.sound_interval, 'data-ed-field="sound_interval"') }}</label>
+        <label class="switch"><span>Shuffle</span><input type="checkbox" data-ed-field="sound_shuffle" {{ 'checked' if p.sound_shuffle else '' }}><span class="track"></span></label>
       </div>
       {% endif %}
     </div>
+
+    <div class="row-buttons split">
+      <button class="btn ghost" data-rename>Rename</button>
+      <button class="btn ghost danger" data-delete-saved="{{ p.name }}">Delete playlist</button>
+    </div>
   </section>
+  {% endfor %}
+
+  {# Choose files for a playlist (filled in by app.js from the Library). #}
+  <dialog id="picker" class="sheet picker" aria-labelledby="picker-title">
+    <div class="sheet-inner">
+      <div class="picker-head"><h2 id="picker-title">Add artwork</h2><button class="btn small primary" id="picker-done">Done</button></div>
+      <p class="sub" id="picker-hint">Tap to add or remove. New ones go at the end.</p>
+      <div class="tiles picker-tiles" id="picker-tiles"></div>
+    </div>
+  </dialog>
 
   {# ============================ LIBRARY ============================ #}
   <section class="view" id="view-library" data-view="library" hidden aria-label="Library">
@@ -237,7 +290,12 @@
           <input type="file" name="file" id="file" accept="{{ accept }}" multiple hidden>
         </label>
       </div>
-      <label class="switch compact"><span>Add uploads to the playlist / sound</span><input type="checkbox" name="add" value="1" checked><span class="track"></span></label>
+      <label class="upload-to"><span>Add uploads to</span>
+        <select name="to" id="upload-to">
+          <option value="">Library only</option>
+          {% for p in status.saved %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
+        </select>
+      </label>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
       <p class="hint">Video (MP4 works best), GIF, images incl. SVG, and music. Up to {{ max_upload_mb // 1024 if max_upload_mb >= 1024 else max_upload_mb }} {{ 'GB' if max_upload_mb >= 1024 else 'MB' }} per file.</p>
     </form>
@@ -276,7 +334,12 @@
         </div>
         <p class="warn-text" id="sheet-warning" hidden></p>
         <button type="button" class="btn primary wide" id="sheet-play">{{ icon('play') }}<span>Play now</span></button>
-        <button type="button" class="btn wide" id="sheet-list"></button>
+        <button type="button" class="btn wide" id="sheet-add">{{ icon('plus') }}<span>Add to playlist…</span></button>
+        <div class="sheet-lists" id="sheet-lists" hidden>
+          <p class="sub">Add to:</p>
+          {% for p in status.saved %}<button type="button" class="btn wide list-choice" data-add-to="{{ p.name }}">{{ p.name }}</button>{% endfor %}
+          <button type="button" class="btn ghost wide" data-add-to-new>{{ icon('plus') }}New playlist…</button>
+        </div>
         <button type="button" class="btn ghost danger wide" id="sheet-delete">Delete file</button>
         <button value="close" class="btn ghost wide">Cancel</button>
       </form>

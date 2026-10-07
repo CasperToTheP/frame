@@ -215,7 +215,12 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             if warning:
                 log.warning("uploaded %s: %s", name, warning)
                 heavy.append(f"{name}: {warning}" if len(saved) > 1 else warning)
-        if request.form.get("add") in ("1", "true", "on"):
+        target = request.form.get("to")
+        if target:
+            # Add to a saved playlist (artwork and music go to their own lists).
+            for name in saved:
+                ctl.add_to_playlist(target, name)
+        elif request.form.get("add") in ("1", "true", "on"):
             # Add to the playlist (visuals) or the sound list (audio).
             for name in saved:
                 result.update(ctl.add(name))
@@ -274,6 +279,28 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     def api_save_playlist():
         # {"name": "Sleeping"}: save the current playlist + sounds under that name.
         return jsonify(ok=True, **ctl.save_playlist(_json_body().get("name")))
+
+    @app.post("/api/saved/new")
+    def api_new_playlist():
+        # {"name": "Sleeping"}: a new, empty playlist. Nothing on the frame changes.
+        return jsonify(ok=True, **ctl.create_playlist(_json_body().get("name")))
+
+    @app.post("/api/saved/edit")
+    def api_edit_playlist():
+        # {"name": "Sleeping", "items": [...], "sounds": [...], "interval": 600,
+        #  "shuffle": false, "sound_interval": 0, "sound_shuffle": false, "fade": 2,
+        #  "rename": "Night"} - any of them. The frame follows if it's playing.
+        body = dict(_json_body())
+        name = body.pop("name", None)
+        return jsonify(ok=True, **ctl.edit_playlist(name, body))
+
+    @app.post("/api/saved/add")
+    def api_add_to_playlist():
+        body = _json_body()
+        filename = body.get("filename")
+        if not isinstance(filename, str):
+            raise MediaError("filename is required")
+        return jsonify(ok=True, **ctl.add_to_playlist(body.get("name"), filename))
 
     @app.post("/api/saved/load")
     def api_load_playlist():

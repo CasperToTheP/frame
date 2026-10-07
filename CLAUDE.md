@@ -95,10 +95,16 @@ Key rules:
   refuses cross-origin POSTs. Control endpoints require `application/json`, which forces
   a CORS preflight, as a cheap CSRF guard.
 - **Saved playlists** live in `state.json` under `saved` (name → the `SAVED_KEYS`
-  settings). The Director ignores them; loading one copies its settings over the live
-  ones. "Active" is computed by comparing, never stored.
+  settings) and are edited independently of what plays. `active` names the one that's
+  playing: loading one copies its settings over the live ones and sets `active`, and
+  `edit_playlist` writes to the live settings too only when it's the active one. Direct
+  changes to what's playing ("Play now", `/api/playlist`, `/api/sounds`, `/api/add`)
+  clear `active`, so they never change a saved playlist. The Director ignores all this.
+  Settings from before `active` existed fall back to matching contents
+  (`Controller.active_name`).
 - **The UI** is one server-rendered page with four tab views (`#now`, `#playlists`,
-  `#library`, `#settings`) switched by `app.js`; actions save and reload the page, which
+  `#library`, `#settings`) plus one editor view per saved playlist (`#edit/<name>`),
+  switched by `app.js`; actions save and reload the page, which
   keeps the tab and scroll position.
 - **Thumbnails** (`thumbs.py`): a 480 px JPEG per visual in `/var/lib/frame/thumbs`, made
   by a short-lived `mpv --vo=image` (no ffmpeg on the Pi) in one background thread of the

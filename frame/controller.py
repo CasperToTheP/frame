@@ -33,7 +33,7 @@ from .player import (
     parse_mpv_version,
     scale_filter,
 )
-from .state import SAVED_KEYS, StateStore, saved_name
+from .state import DEFAULTS, SAVED_KEYS, StateStore, saved_name
 from .thumbs import Thumbnails
 
 log = logging.getLogger("frame.control")
@@ -71,6 +71,7 @@ class Controller:
             "sound_shuffle": state["sound_shuffle"],
             "fade": state["fade"],
             "saved": self._saved_summary(state),
+            "active": self.active_name(state),
             "volume": state["volume"],
             "muted": state["muted"],
             "rotation": state["rotation"],
@@ -136,7 +137,7 @@ class Controller:
     def play(self, name: str) -> dict[str, Any]:
         """Show just this artwork (a playlist of one, looping forever)."""
         self._check(name, VISUAL_KINDS, "an audio file; add it to Sound instead")
-        self.state.update(playlist=[name], blank=False)
+        self.state.update(playlist=[name], blank=False, active=None)
         log.info("artwork set to %s", name)
         return self._offline_warning()
 
@@ -146,10 +147,10 @@ class Controller:
         state = self.state.load()
         if kind_of(name) == "audio":
             if name not in state["sounds"]:
-                self.state.update(sounds=state["sounds"] + [name])
+                self.state.update(sounds=state["sounds"] + [name], active=None)
         else:
             self._check(name, VISUAL_KINDS, "not a visual")
-            changes: dict[str, Any] = {"blank": False}
+            changes: dict[str, Any] = {"blank": False, "active": None}
             if name not in state["playlist"]:
                 changes["playlist"] = state["playlist"] + [name]
             self.state.update(**changes)
@@ -186,7 +187,8 @@ class Controller:
             update[interval_key] = changes["interval"]
         if "shuffle" in changes:
             update[shuffle_key] = changes["shuffle"]
-        state = self.state.update(**update)
+        # Changing what's playing directly never edits a saved playlist.
+        state = self.state.update(**update, active=None)
         log.info("%s changed: %s", list_key, ", ".join(f"{k}={state[k]}" for k in update))
         return {"items": state[list_key], "interval": state[interval_key],
                 "shuffle": state[shuffle_key], **self._offline_warning()}
@@ -224,48 +226,138 @@ class Controller:
 
     # --- saved playlists ("Sleeping", "Morning"...) ---------------------------
 
+    @staticmethod
+    def active_name(state: dict[str, Any]) -> str | None:
+        """The saved playlist that's playing. Settings from before ``active`` existed
+        fall back to the one whose contents match what's playing."""
+        if state["active"] in state["saved"]:
+            return state["active"]
+        if state["active"] is None and state["playlist"]:
+            current = {k: state[k] for k in SAVED_KEYS}
+            return next((n for n, e in state["saved"].items() if e == current), None)
+        return None
+
     def _saved_summary(self, state: dict[str, Any]) -> list[dict[str, Any]]:
-        current = {k: state[k] for k in SAVED_KEYS}
-        return [
-            {"name": name, "count": len(entry["playlist"]), "sound_count": len(entry["sounds"]),
-             "first": next(iter(self.library.playable(entry["playlist"], VISUAL_KINDS)), None),
-             # Up to four pictures for the cover.
-             "covers": self.library.playable(entry["playlist"], VISUAL_KINDS)[:4],
-             # The one that's playing now, unless it's been edited since.
-             "active": not state["blank"] and entry == current}
-            for name, entry in state["saved"].items()
-        ]
+        active = self.active_name(state)
+        out = []
+        for name, entry in state["saved"].items():
+            visuals = self.library.playable(entry["playlist"], VISUAL_KINDS)
+            out.append({
+                "name": name,
+                "items": entry["playlist"], "sounds": entry["sounds"],
+                "interval": entry["interval"], "shuffle": entry["shuffle"],
+                "sound_interval": entry["sound_interval"],
+                "sound_shuffle": entry["sound_shuffle"], "fade": entry["fade"],
+                "count": len(entry["playlist"]), "sound_count": len(entry["sounds"]),
+                "first": visuals[0] if visuals else None,
+                "covers": visuals[:4],  # up to four pictures for the cover
+                "active": name == active,
+                "playing": name == active and not state["blank"],
+            })
+        return out
+
+    def _saved_entry(self, state: dict[str, Any], name: Any) -> tuple[str, dict[str, Any]]:
+        name = saved_name(name)
+        entry = state["saved"].get(name)
+        if entry is None:
+            raise MediaError(f"no playlist called {name!r}", 404)
+        return name, entry
 
     def save_playlist(self, name: Any) -> dict[str, Any]:
-        """Save the current playlist, sound list and their settings under ``name``.
-        An existing playlist with that name is replaced."""
+        """Save what's playing as a playlist called ``name`` (replacing one with
+        that name). It's then the playing playlist."""
         name = saved_name(name)
         state = self.state.load()
         if not state["playlist"]:
-            raise MediaError("the playlist is empty; add some artwork first")
+            raise MediaError("nothing is playing to save; add some artwork first")
         saved = dict(state["saved"])
         saved[name] = {k: state[k] for k in SAVED_KEYS}
-        self.state.update(saved=saved)
+        self.state.update(saved=saved, active=name)
         log.info("saved playlist %r", name)
         return {"name": name}
 
+    def create_playlist(self, name: Any) -> dict[str, Any]:
+        """A new, empty playlist. Nothing on the frame changes."""
+        name = saved_name(name)
+        state = self.state.load()
+        if name in state["saved"]:
+            raise MediaError(f"there's already a playlist called {name!r}", 409)
+        saved = dict(state["saved"])
+        saved[name] = {k: DEFAULTS[k] for k in SAVED_KEYS}
+        self.state.update(saved=saved)
+        log.info("created playlist %r", name)
+        return {"name": name}
+
+    def edit_playlist(self, name: Any, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change a saved playlist. If it's the one playing, the frame follows.
+
+        ``changes`` may hold: items (artwork), sounds, interval, shuffle,
+        sound_interval, sound_shuffle, fade, and rename (a new name).
+        """
+        allowed = {"items", "sounds", "interval", "shuffle", "sound_interval",
+                   "sound_shuffle", "fade", "rename"}
+        unknown = set(changes) - allowed
+        if unknown:
+            raise MediaError(f"unknown field(s): {', '.join(sorted(unknown))}")
+        state = self.state.load()
+        name, entry = self._saved_entry(state, name)
+        entry = dict(entry)
+        for key, kinds in (("items", VISUAL_KINDS), ("sounds", ("audio",))):
+            if key in changes:
+                items = changes[key]
+                if not isinstance(items, list) or not all(isinstance(n, str) for n in items):
+                    raise MediaError(f"{key} must be a list of filenames")
+                for item in items:
+                    self._check(item, kinds, "not allowed in this list")
+                entry["playlist" if key == "items" else "sounds"] = items
+        for key in ("interval", "shuffle", "sound_interval", "sound_shuffle", "fade"):
+            if key in changes:
+                entry[key] = changes[key]
+        new_name = saved_name(changes["rename"]) if "rename" in changes else name
+        if new_name != name and new_name in state["saved"]:
+            raise MediaError(f"there's already a playlist called {new_name!r}", 409)
+        # Keep the order of the playlists when renaming.
+        saved = {(new_name if n == name else n): (entry if n == name else e)
+                 for n, e in state["saved"].items()}
+        update: dict[str, Any] = {"saved": saved}
+        playing = self.active_name(state) == name
+        if playing:
+            update.update({k: entry[k] for k in SAVED_KEYS}, active=new_name)
+        state = self.state.update(**update)
+        log.info("edited playlist %r%s", new_name, " (playing)" if playing else "")
+        return {"name": new_name, "playing": playing}
+
+    def add_to_playlist(self, name: Any, filename: str) -> dict[str, Any]:
+        """Append a file to a saved playlist: artwork to its artwork, music to its sound."""
+        self.library.resolve(filename)
+        _, entry = self._saved_entry(self.state.load(), name)
+        if kind_of(filename) == "audio":
+            if filename in entry["sounds"]:
+                return {"name": saved_name(name), "added": False}
+            return dict(self.edit_playlist(name, {"sounds": entry["sounds"] + [filename]}),
+                        added=True)
+        self._check(filename, VISUAL_KINDS, "not artwork or music")
+        if filename in entry["playlist"]:
+            return {"name": saved_name(name), "added": False}
+        return dict(self.edit_playlist(name, {"items": entry["playlist"] + [filename]}),
+                    added=True)
+
     def load_playlist(self, name: Any) -> dict[str, Any]:
         """Play a saved playlist (its artwork, sounds, timing and fade)."""
-        name = saved_name(name)
-        entry = self.state.load()["saved"].get(name)
-        if entry is None:
-            raise MediaError(f"no saved playlist called {name!r}", 404)
-        self.state.update(**entry, blank=False)
-        log.info("playing saved playlist %r", name)
+        name, entry = self._saved_entry(self.state.load(), name)
+        if not self.library.playable(entry["playlist"], VISUAL_KINDS):
+            raise MediaError(f"“{name}” has no artwork yet; add some first")
+        self.state.update(**entry, blank=False, active=name)
+        log.info("playing playlist %r", name)
         return self._offline_warning()
 
     def delete_playlist(self, name: Any) -> None:
-        name = saved_name(name)
-        saved = dict(self.state.load()["saved"])
-        if saved.pop(name, None) is None:
-            raise MediaError(f"no saved playlist called {name!r}", 404)
-        self.state.update(saved=saved)
-        log.info("deleted saved playlist %r", name)
+        """Delete a saved playlist. If it's playing, the frame keeps playing it."""
+        state = self.state.load()
+        name, _ = self._saved_entry(state, name)
+        saved = {n: e for n, e in state["saved"].items() if n != name}
+        self.state.update(saved=saved, active=None if state["active"] == name else state["active"])
+        log.info("deleted playlist %r", name)
 
     def _check(self, name: str, kinds: tuple[str, ...], why: str) -> None:
         self.library.resolve(name)  # 400 for bad names, 404 if missing

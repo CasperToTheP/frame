@@ -170,20 +170,26 @@ into a video) right after it's uploaded, in the background. For files that were 
 there, it makes them once after updating; that takes a few seconds per file on a Pi 4, and
 the placeholder icons fill in as they're ready. They're stored in `/var/lib/frame/thumbs`.
 
-### Saved playlists
-Save what's playing under a name — “Sleeping”, “Morning”, “Party” — and switch between
-them with one tap on **Now** or **Playlists**. A saved playlist remembers the artwork, the
-sound list, their timing, shuffle and the fade.
-- **Save current** asks for a name. Using an existing name replaces that one.
-- The playlist that's playing is highlighted. If you change the current lists afterwards,
-  the highlight goes away until you save again (the saved version doesn't change by itself).
-- **✕** on a saved playlist deletes it; the files stay in the Library. Deleting a file also
-  removes it from every saved playlist.
+### Playlists
+Playlists are built and edited on their own, like in a music app — **nothing on the frame
+changes until you tap ▶ Play**.
+- **Playlists → New**: give it a name (“Sleeping”, “Morning”…). Then **Add artwork** and
+  **Add music** open a picker of your Library: tap files to add or remove them (new ones go
+  at the end, in the order you tap). **↑ ↓** reorder, **✕** removes.
+- Each playlist has its own **Change every**, **Fade between items**, **Shuffle**, and for
+  music **Change track** and **Shuffle**. **Rename** and **Delete playlist** are at the bottom.
+- **▶** on a playlist (or its button on **Now**) plays it. The playing one is marked
+  **Playing**; edits to *that* playlist show on the frame right away.
+- In the **Library**, tap a file → **Add to playlist…** and pick one (✓ marks playlists that
+  already have it), or start a new one.
+- **Show only this artwork now** on a file plays just that file, looping. It doesn't change
+  any playlist; **Playlists** then offers **Save as playlist** for what's playing.
+- Deleting a playlist doesn't stop the frame. Deleting a file removes it from every playlist.
 
 ### Upload
 In **Library**, tap **Upload files** and choose one or more files; the upload starts at
-once and shows its progress. With **Add to playlist / sound** on (the default), visuals are
-added to the end of the playlist and audio files to the sound list. See
+once and shows its progress. Pick a playlist under **Add uploads to** to put them straight
+into it (artwork into its artwork, music into its sound); the default is the Library only. See
 [Supported files](#supported-files). The default size limit is 4 GB, and an upload is
 refused if it would leave less than 256 MB free on the SD card.
 
@@ -298,7 +304,10 @@ The UI uses a small JSON API that you can also script against:
 | `POST /api/soundtrack` | `{"filename": "song.mp3"}` or `{"filename": null}` | play only this audio file / back to the artwork's own sound |
 | `POST /api/next` | `{"which": "visual"}` or `{"which": "sound"}`, optional `"filename"` | skip to the next item now, or jump to that item of the list |
 | `POST /api/stop` / `POST /api/start` | | black screen (keeps the playlist) / start again |
-| `POST /api/saved` | `{"name": "Sleeping"}` | save the current playlist, sounds and their settings under a name (replaces one with that name) |
+| `POST /api/saved/new` | `{"name": "Sleeping"}` | a new, empty playlist (the frame doesn't change) |
+| `POST /api/saved/edit` | `{"name": "Sleeping"}` + any of `items`, `sounds`, `interval`, `shuffle`, `sound_interval`, `sound_shuffle`, `fade`, `rename` | change a playlist; the frame follows only if it's the one playing |
+| `POST /api/saved/add` | `{"name": "Sleeping", "filename": "a.mp4"}` | add a file to a playlist (music goes to its sound list) |
+| `POST /api/saved` | `{"name": "Sleeping"}` | save what's playing as a playlist (replaces one with that name) |
 | `POST /api/saved/load` | `{"name": "Sleeping"}` | play a saved playlist |
 | `DELETE /api/saved/<name>` | | delete a saved playlist |
 | `GET /media/<name>` | | the file itself (supports range requests) |

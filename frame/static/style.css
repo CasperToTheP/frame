@@ -442,3 +442,60 @@ body:not(.on-now) { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-b
 .upload-btn { min-height: 44px; padding: 8px 16px; }
 .upload .switch.compact { margin-top: 0; }
 .upload .hint { font-size: .8rem; }
+
+/* --- playlists & editor -------------------------------------------------------- */
+.hint.lead { margin: -4px 0 14px; font-size: .88rem; }
+.card.unsaved { border-style: dashed; }
+.card.unsaved .sub { margin: 0; }
+a.saved-main { color: inherit; text-decoration: none; }
+.cover-wrap { position: relative; }
+.cover-wrap > a { display: block; }
+.cover-wrap > .play-badge { border: 0; right: 8px; bottom: 14px; width: 44px; height: 44px; z-index: 1; }
+.cover-wrap > .play-badge .i { width: 18px; height: 18px; }
+.cover-wrap > .play-badge:disabled { opacity: .35; }
+.playing-label { color: var(--accent); }
+
+.back {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 6px;
+  color: var(--muted); text-decoration: none; font-weight: 600; font-size: .92rem;
+}
+.back .back-icon { transform: rotate(-90deg); width: 18px; height: 18px; }
+.editor-head { display: flex; align-items: center; gap: 14px; margin: 10px 0 14px; }
+.editor-head .saved-thumb { flex: none; width: 96px; margin: 0; border-radius: 14px; }
+.editor-titles { min-width: 0; }
+.editor-titles .view-title { margin: 0; overflow-wrap: anywhere; }
+.notice {
+  display: flex; align-items: center; gap: 4px;
+  margin: 0 0 4px; padding: 12px 14px; border-radius: 14px;
+  background: var(--accent-soft); color: var(--text); font-size: .92rem;
+}
+.notice .i.inline { color: var(--accent); }
+.editor > .btn.wide { margin-bottom: 2px; }
+.row-buttons.split { display: flex; gap: 10px; }
+.row-buttons.split .btn { flex: 1; }
+.q-name small.warn { color: var(--warn); }
+
+/* Picker sheet */
+.picker { max-height: 88vh; }
+.picker .sheet-inner { max-height: 88vh; overflow-y: auto; }
+.picker-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -18px; padding-top: 4px; background: var(--surface); z-index: 1; }
+.picker-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 8px; }
+.tile.pick .tile-media { aspect-ratio: 1; }
+.tile.pick .tile-name { font-size: .78rem; font-weight: 500; }
+.pick-tick {
+  position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 2px solid rgba(255,255,255,.85); background: rgba(0,0,0,.35); color: transparent;
+}
+.pick-tick .i { width: 15px; height: 15px; }
+.tile.pick.chosen .tile-media { border-color: var(--accent); }
+.tile.pick.chosen .pick-tick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+/* Library sheet: choose a playlist */
+.sheet-lists { display: grid; gap: 8px; }
+.sheet-lists .sub { margin: 4px 2px 0; }
+.list-choice { justify-content: flex-start; }
+
+/* Upload: add to which playlist */
+.upload-to { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); font-size: .92rem; margin: 0 2px; }
+.list-choice.has::after { content: "✓ in it"; margin-left: auto; color: var(--accent); font-size: .85rem; }

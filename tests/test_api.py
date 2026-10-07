@@ -414,8 +414,9 @@ def test_index_renders_playlists(client):
     post_file(client, "a.mp4", MP4, add="1")
     post_file(client, "b.gif", b"GIF89a" + b"\0" * 32, add="1")
     post_file(client, "song.mp3", MP3, add="1")
+    client.post("/api/saved", json={"name": "Mix"})
     html = client.get("/").get_data(as_text=True)
-    assert 'id="playlist-items"' in html and 'id="sounds-items"' in html
+    assert 'data-view="edit/Mix"' in html and 'href="#edit/Mix"' in html
     assert "Change every" in html and "Change track" in html
 
 
@@ -557,3 +558,107 @@ def test_jump_to_an_item(client, cfg):
     assert jump("b.png").status_code == 200
     assert (cfg.run_dir / "next-visual").read_text() == "b.png"
     assert jump("x.png").status_code == 400
+
+
+
+# --- editing playlists without touching what plays ------------------------------
+
+
+def live(ctl):
+    st = state(ctl)
+    return st["playlist"], st["sounds"], st["interval"]
+
+
+def test_new_playlist_is_built_without_changing_the_frame(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("s.mp3", MP3)]:
+        post_file(client, name, data)
+    client.post("/api/play", json={"filename": "a.mp4"})
+    before = live(ctl)
+
+    assert client.post("/api/saved/new", json={"name": "Sleeping"}).status_code == 200
+    assert client.post("/api/saved/new", json={"name": "Sleeping"}).status_code == 409
+    def add(filename):
+        return client.post("/api/saved/add", json={"name": "Sleeping", "filename": filename})
+
+    assert add("b.png").get_json()["added"]
+    assert add("s.mp3").status_code == 200
+    res = client.post("/api/saved/edit", json={"name": "Sleeping", "interval": 900, "fade": 3})
+    assert res.get_json() == {"ok": True, "name": "Sleeping", "playing": False}
+    assert live(ctl) == before  # the frame still shows a.mp4
+
+    saved = state(ctl)["saved"]["Sleeping"]
+    assert (saved["playlist"], saved["sounds"], saved["interval"], saved["fade"]) == \
+        (["b.png"], ["s.mp3"], 900, 3.0)
+    summary = client.get("/api/status").get_json()["saved"]
+    entry = next(p for p in summary if p["name"] == "Sleeping")
+    assert not entry["playing"] and entry["items"] == ["b.png"]
+
+    # Playing it puts it on the frame; editing it then changes the frame too.
+    client.post("/api/saved/load", json={"name": "Sleeping"})
+    assert live(ctl) == (["b.png"], ["s.mp3"], 900)
+    res = client.post("/api/saved/edit", json={"name": "Sleeping", "items": ["a.mp4", "b.png"]})
+    assert res.get_json()["playing"] is True
+    assert live(ctl)[0] == ["a.mp4", "b.png"]
+
+
+def test_play_now_detaches_from_the_playlist(client, ctl):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "b.png", PNG)
+    client.post("/api/saved/new", json={"name": "Mix"})
+    client.post("/api/saved/edit", json={"name": "Mix", "items": ["a.mp4", "b.png"]})
+    client.post("/api/saved/load", json={"name": "Mix"})
+    client.post("/api/play", json={"filename": "b.png"})
+    st = state(ctl)
+    assert st["active"] is None and st["saved"]["Mix"]["playlist"] == ["a.mp4", "b.png"]
+    # Editing it now doesn't touch the frame.
+    client.post("/api/saved/edit", json={"name": "Mix", "items": ["a.mp4"]})
+    assert state(ctl)["playlist"] == ["b.png"]
+
+
+def test_rename_and_delete_keep_playback(client, ctl):
+    post_file(client, "a.mp4", MP4, add="1")
+    client.post("/api/saved", json={"name": "Old"})
+    assert state(ctl)["active"] == "Old"
+    res = client.post("/api/saved/edit", json={"name": "Old", "rename": "New"})
+    assert res.get_json()["name"] == "New"
+    st = state(ctl)
+    assert list(st["saved"]) == ["New"] and st["active"] == "New"
+    client.post("/api/saved/new", json={"name": "Other"})
+    res = client.post("/api/saved/edit", json={"name": "New", "rename": "Other"})
+    assert res.status_code == 409
+    client.delete("/api/saved/New")
+    st = state(ctl)
+    assert st["active"] is None and st["playlist"] == ["a.mp4"]  # still playing
+
+
+def test_edit_validation(client):
+    post_file(client, "a.mp4", MP4)
+    post_file(client, "s.mp3", MP3)
+    client.post("/api/saved/new", json={"name": "P"})
+    bad = [{"items": ["s.mp3"]}, {"sounds": ["a.mp4"]}, {"items": ["gone.mp4"]},
+           {"items": "a.mp4"}, {"interval": -1}, {"colour": 1}]
+    for changes in bad:
+        res = client.post("/api/saved/edit", json={"name": "P", **changes})
+        assert res.status_code in (400, 404), changes
+    assert client.post("/api/saved/edit", json={"name": "Nope", "fade": 1}).status_code == 404
+    # An empty playlist can't be played.
+    assert client.post("/api/saved/load", json={"name": "P"}).status_code == 400
+
+
+def test_upload_straight_into_a_playlist(client, ctl):
+    client.post("/api/saved/new", json={"name": "Inbox"})
+    post_file(client, "a.mp4", MP4, to="Inbox")
+    post_file(client, "s.mp3", MP3, to="Inbox")
+    saved = state(ctl)["saved"]["Inbox"]
+    assert (saved["playlist"], saved["sounds"]) == (["a.mp4"], ["s.mp3"])
+    assert state(ctl)["playlist"] == []  # nothing changed on the frame
+
+
+def test_settings_from_before_active_existed(client, ctl, cfg):
+    post_file(client, "a.mp4", MP4)
+    entry = {"playlist": ["a.mp4"], "interval": 300, "shuffle": False, "sounds": [],
+             "sound_interval": 0, "sound_shuffle": False, "fade": 1.0}
+    cfg.state_file.write_text(json.dumps({"playlist": ["a.mp4"], "saved": {"Old": entry}}))
+    assert client.get("/api/status").get_json()["active"] == "Old"
+    res = client.post("/api/saved/edit", json={"name": "Old", "interval": 60})
+    assert res.get_json()["playing"] is True and state(ctl)["interval"] == 60

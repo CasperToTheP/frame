@@ -9,6 +9,7 @@ const readJSON = (el, key, fallback) => {
 
 const KINDS = readJSON(document.body, "kinds", {});      // filename -> kind
 const SAVED = readJSON(document.body, "saved", []);      // saved playlist names
+const LIVE = readJSON(document.body, "live", []);        // files in what's playing now
 const VISUAL = new Set(["video", "animation", "image"]);
 
 // --- feedback --------------------------------------------------------------
@@ -63,11 +64,21 @@ async function act(method, url, body, { reload = false, ok } = {}) {
 
 const VIEWS = ["now", "playlists", "library", "settings"];
 
+function currentView() {
+  let hash = "";
+  try { hash = decodeURIComponent(location.hash.slice(1)); } catch (_) { /* bad URL */ }
+  if (VIEWS.includes(hash)) return hash;
+  // A playlist editor: #edit/<name>
+  if (hash.startsWith("edit/") && $$(".view").some((v) => v.dataset.view === hash)) return hash;
+  return "now";
+}
+
 function showView() {
-  const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "now";
+  const name = currentView();
+  const tab = name.startsWith("edit/") ? "playlists" : name;
   for (const v of $$(".view")) v.hidden = v.dataset.view !== name;
   for (const a of $$(".tabbar a")) {
-    const active = a.dataset.tab === name;
+    const active = a.dataset.tab === tab;
     a.classList.toggle("active", active);
     if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
@@ -267,24 +278,38 @@ $("#volume").addEventListener("input", (e) => {
   volTimer = setTimeout(() => act("POST", "/api/volume", { volume: v }), 150);
 });
 
-// --- saved playlists ----------------------------------------------------------
+// --- playlists ------------------------------------------------------------------
+
+const editHash = (name) => `#edit/${encodeURIComponent(name)}`;
+
+function askName(question, current = "") {
+  const name = (prompt(question, current) || "").trim();
+  return name || null;
+}
 
 for (const btn of $$("[data-load]")) {
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     act("POST", "/api/saved/load", { name: btn.dataset.load },
         { reload: true, ok: `Playing “${btn.dataset.load}”` });
   });
 }
 
+for (const btn of $$("[data-new-playlist]")) {
+  btn.addEventListener("click", async () => {
+    const name = askName("Name the new playlist — for example “Sleeping” or “Morning”:");
+    if (!name) return;
+    const data = await act("POST", "/api/saved/new", { name }, { ok: `Created “${name}”` });
+    if (data) { location.hash = editHash(data.name); reloadSoon(300); }
+  });
+}
+
 for (const btn of $$("[data-save]")) {
   btn.addEventListener("click", () => {
-    if (!listItems("playlist").length) {
-      toast("Add some artwork to the playlist first — open the Library and tap a file.", true);
-      return;
-    }
-    const name = (prompt("Name this playlist — for example “Sleeping” or “Morning”:") || "").trim();
+    const name = askName("Save what's playing as a playlist called:");
     if (!name) return;
-    if (SAVED.includes(name) && !confirm(`Replace the saved playlist “${name}” with what's playing now?`)) return;
+    if (SAVED.includes(name) && !confirm(`Replace the playlist “${name}” with what's playing now?`)) return;
     act("POST", "/api/saved", { name }, { reload: true, ok: `Saved “${name}”` });
   });
 }
@@ -292,60 +317,131 @@ for (const btn of $$("[data-save]")) {
 for (const btn of $$("[data-delete-saved]")) {
   btn.addEventListener("click", () => {
     const name = btn.dataset.deleteSaved;
-    if (!confirm(`Delete the saved playlist “${name}”? Your files stay in the Library.`)) return;
-    act("DELETE", `/api/saved/${encodeURIComponent(name)}`, undefined, { reload: true, ok: "Deleted" });
+    if (!confirm(`Delete the playlist “${name}”? Your files stay in the Library, and the frame keeps playing.`)) return;
+    act("DELETE", `/api/saved/${encodeURIComponent(name)}`, undefined, { ok: "Deleted" })
+      .then((data) => { if (data) { location.hash = "#playlists"; reloadSoon(300); } });
   });
 }
 
-// --- current artwork and sound lists -----------------------------------------
+// --- playlist editor ---------------------------------------------------------------
 
-const LIST_API = { playlist: "/api/playlist", sounds: "/api/sounds" };
+function editor(el) { return el.closest("[data-playlist]"); }
 
-function listItems(id) {
-  const el = document.getElementById(id);
-  return el ? readJSON(el, "items", []) : [];
+function editPlaylist(ed, changes, ok) {
+  return act("POST", "/api/saved/edit", { name: ed.dataset.playlist, ...changes }, { reload: true, ok });
 }
 
-function saveList(id, items, ok) {
-  return act("POST", LIST_API[id], { items }, { reload: true, ok });
-}
+function edList(ed, field) { return readJSON(ed, field, []); }
 
-for (const btn of $$("[data-move]")) {
+for (const btn of $$("[data-ed-move]")) {
   btn.addEventListener("click", () => {
-    const id = btn.dataset.move;
-    const items = listItems(id);
+    const ed = editor(btn);
+    const field = btn.dataset.edMove;
+    const items = edList(ed, field);
     const i = Number(btn.dataset.index);
     const j = i + Number(btn.dataset.delta);
     if (j < 0 || j >= items.length) return;
     [items[i], items[j]] = [items[j], items[i]];
-    saveList(id, items);
+    editPlaylist(ed, { [field]: items });
   });
 }
 
-for (const btn of $$("[data-remove]")) {
+for (const btn of $$("[data-ed-remove]")) {
   btn.addEventListener("click", () => {
-    const id = btn.dataset.remove;
-    const items = listItems(id);
+    const ed = editor(btn);
+    const field = btn.dataset.edRemove;
+    const items = edList(ed, field);
     items.splice(Number(btn.dataset.index), 1);
-    saveList(id, items);
+    editPlaylist(ed, { [field]: items }, "Removed");
   });
 }
 
-function bindOption(sel, url, field, convert) {
-  const el = $(sel);
-  if (!el) return;
+for (const el of $$("[data-ed-field]")) {
   el.addEventListener("change", () => {
-    act("POST", url, { [field]: convert(el) }, { reload: true, ok: "Saved" });
+    const value = el.type === "checkbox" ? el.checked : Number(el.value);
+    editPlaylist(editor(el), { [el.dataset.edField]: value }, "Saved");
   });
 }
-bindOption("#interval", "/api/playlist", "interval", (el) => Number(el.value));
-bindOption("#shuffle", "/api/playlist", "shuffle", (el) => el.checked);
-bindOption("#sound-interval", "/api/sounds", "interval", (el) => Number(el.value));
-bindOption("#sound-shuffle", "/api/sounds", "shuffle", (el) => el.checked);
 
-const ownSound = $("#btn-own-sound");
-if (ownSound) {
-  ownSound.addEventListener("click", () => saveList("sounds", [], "Each artwork plays its own sound"));
+for (const btn of $$("[data-rename]")) {
+  btn.addEventListener("click", async () => {
+    const ed = editor(btn);
+    const name = askName("New name:", ed.dataset.playlist);
+    if (!name || name === ed.dataset.playlist) return;
+    const data = await act("POST", "/api/saved/edit", { name: ed.dataset.playlist, rename: name },
+                           { ok: "Renamed" });
+    if (data) { location.hash = editHash(data.name); reloadSoon(300); }
+  });
+}
+
+// Picker: choose files from the Library for a playlist's artwork or sound.
+const picker = $("#picker");
+let pickerState = null;
+
+function openPicker(ed, field) {
+  const audio = field === "sounds";
+  const chosen = new Set(edList(ed, field));
+  pickerState = { ed, field, chosen, before: edList(ed, field), tapped: [] };
+  $("#picker-title").textContent = audio ? "Add music" : "Add artwork";
+  const tiles = $("#picker-tiles");
+  const names = Object.keys(KINDS).filter((n) => (KINDS[n] === "audio") === audio).sort(
+    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  if (!names.length) {
+    tiles.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = audio ? "No music in the Library yet. Upload some first."
+                          : "No artwork in the Library yet. Upload some first.";
+    tiles.appendChild(p);
+  } else {
+    tiles.replaceChildren(...names.map((name) => {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "tile pick" + (chosen.has(name) ? " chosen" : "");
+      tile.dataset.pick = name;
+      const media = document.createElement("span");
+      media.className = "tile-media";
+      media.append(...previewOf(name));
+      const tick = document.createElement("span");
+      tick.className = "pick-tick";
+      tick.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-check"/></svg>';
+      media.appendChild(tick);
+      const label = document.createElement("span");
+      label.className = "tile-name";
+      label.textContent = name;
+      tile.append(media, label);
+      tile.addEventListener("click", () => {
+        const { tapped } = pickerState;
+        if (chosen.has(name)) {
+          chosen.delete(name);
+          if (tapped.includes(name)) tapped.splice(tapped.indexOf(name), 1);
+        } else {
+          chosen.add(name);
+          tapped.push(name);
+        }
+        tile.classList.toggle("chosen", chosen.has(name));
+      });
+      return tile;
+    }));
+    watchThumbs(tiles);
+  }
+  if (typeof picker.showModal === "function") picker.showModal(); else picker.setAttribute("open", "");
+}
+
+if (picker) {
+  for (const btn of $$("[data-pick]")) {
+    if (btn.closest("#picker")) continue;
+    btn.addEventListener("click", () => openPicker(editor(btn), btn.dataset.pick));
+  }
+  picker.addEventListener("click", (e) => { if (e.target === picker) picker.close(); });
+  $("#picker-done").addEventListener("click", () => {
+    const { ed, field, chosen, before, tapped } = pickerState;
+    picker.close();
+    // Keep the existing order; new picks go at the end, in the order they were tapped.
+    const items = before.filter((n) => chosen.has(n));
+    for (const name of tapped) if (!items.includes(name)) items.push(name);
+    if (items.join("\n") !== before.join("\n")) editPlaylist(ed, { [field]: items }, "Saved");
+  });
 }
 
 // --- library: filters and the action sheet ---------------------------------
@@ -370,7 +466,6 @@ let sheetName = null;
 function openSheet(tile) {
   sheetName = tile.dataset.tile;
   const audio = tile.dataset.kind === "audio";
-  const listed = tile.dataset.listed === "1";
   $("#sheet-title").textContent = sheetName;
   $("#sheet-meta").textContent = $(".tile-meta", tile).textContent;
   const warning = tile.dataset.warning;
@@ -378,13 +473,15 @@ function openSheet(tile) {
   $("#sheet-warning").hidden = !warning;
   const thumb = $("#sheet-thumb");
   setPreview(thumb, sheetName);
-  $("#sheet-play span").textContent = audio ? "Play only this music" : "Show only this artwork";
-  const list = $("#sheet-list");
-  list.textContent = listed
-    ? (audio ? "Remove from sound list" : "Remove from playlist")
-    : (audio ? "Add to sound list" : "Add to playlist");
-  list.dataset.listed = listed ? "1" : "";
-  list.dataset.audio = audio ? "1" : "";
+  $("#sheet-play span").textContent = audio ? "Play only this music now" : "Show only this artwork now";
+  $("#sheet-lists").hidden = true;
+  $("#sheet-add").hidden = false;
+  // Mark the playlists that already have this file.
+  for (const btn of $$("[data-add-to]")) {
+    const ed = $$("[data-playlist]").find((el) => el.dataset.playlist === btn.dataset.addTo);
+    const has = ed && [...edList(ed, "items"), ...edList(ed, "sounds")].includes(sheetName);
+    btn.classList.toggle("has", Boolean(has));
+  }
   if (typeof sheet.showModal === "function") sheet.showModal();
   else sheet.setAttribute("open", "");
 }
@@ -407,22 +504,42 @@ if (sheet) {
         { reload: true, ok: audio ? "Playing this music" : "Showing this artwork" });
   });
 
-  $("#sheet-list").addEventListener("click", (e) => {
-    const btn = e.currentTarget;
-    const id = btn.dataset.audio ? "sounds" : "playlist";
-    closeSheet();
-    if (btn.dataset.listed) {
-      saveList(id, listItems(id).filter((n) => n !== sheetName), "Removed");
-    } else {
-      act("POST", "/api/add", { filename: sheetName }, { reload: true, ok: "Added" });
-    }
+  $("#sheet-add").addEventListener("click", () => {
+    $("#sheet-add").hidden = true;
+    $("#sheet-lists").hidden = false;
   });
 
+  for (const btn of $$("[data-add-to]")) {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.addTo;
+      closeSheet();
+      const data = await act("POST", "/api/saved/add", { name, filename: sheetName });
+      if (data) {
+        toast(data.added ? `Added to “${name}”` : `Already in “${name}”`);
+        reloadSoon(900);
+      }
+    });
+  }
+
+  const addToNew = $("[data-add-to-new]");
+  if (addToNew) {
+    addToNew.addEventListener("click", async () => {
+      const name = askName("Name the new playlist:");
+      if (!name) return;
+      closeSheet();
+      const made = await act("POST", "/api/saved/new", { name });
+      if (made && await act("POST", "/api/saved/add", { name: made.name, filename: sheetName })) {
+        toast(`Added to “${made.name}”`);
+        reloadSoon(900);
+      }
+    });
+  }
+
   $("#sheet-delete").addEventListener("click", () => {
-    const listed = listItems("playlist").includes(sheetName) || listItems("sounds").includes(sheetName);
+    const listed = LIVE.includes(sheetName);
     const q = listed
-      ? `Delete “${sheetName}”? It's also removed from the playlist and saved playlists. This can't be undone.`
-      : `Delete “${sheetName}”? This can't be undone.`;
+      ? `Delete “${sheetName}”? It's playing now, so the frame moves on. It's also removed from your playlists. This can't be undone.`
+      : `Delete “${sheetName}”? It's also removed from your playlists. This can't be undone.`;
     if (!confirm(q)) return;
     closeSheet();
     const url = `/api/media/${encodeURIComponent(sheetName)}` + (listed ? "?force=1" : "");
