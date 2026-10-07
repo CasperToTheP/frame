@@ -547,51 +547,144 @@ if (sheet) {
   });
 }
 
-// --- upload (XHR for progress reporting); starts as soon as files are picked ---
+// --- upload ----------------------------------------------------------------
+// Files go one at a time (one failure doesn't lose the batch), after checking
+// there's room: the web server stores a whole upload before Frame can check it.
 
-const fileInput = $("#file");
-if (fileInput) {
-  fileInput.addEventListener("change", () => {
-    const form = $("#upload-form");
-    if (!fileInput.files.length) return;
-    const bar = $("#upload-progress");
-    const label = $(".upload-btn span");
-    const count = fileInput.files.length;
+const STALL_SECONDS = 45;        // no progress for this long = stalled
+const PROCESSING_SECONDS = 600;  // after 100%: saving / converting on the Pi
+
+const fmtSize = (bytes) => bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(1)} GB`
+  : bytes >= 1048576 ? `${Math.round(bytes / 1048576)} MB` : "less than 1 MB";
+
+function uploadOne(file, target, onProgress) {
+  return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/media");
-    xhr.upload.onprogress = (ev) => {
-      if (!ev.lengthComputable) return;
-      const pct = Math.round((ev.loaded / ev.total) * 100);
-      bar.value = pct;
-      // At 100% the frame may still be converting (animated WebP) or checking the file.
-      label.textContent = pct < 100 ? `Uploading… ${pct}%` : "Processing…";
-    };
-    const done = () => {
-      bar.hidden = true;
-      label.textContent = "Upload files";
-      fileInput.value = "";
-    };
-    xhr.onload = () => {
-      let data = {};
-      try { data = JSON.parse(xhr.responseText); } catch (_) { /* non-JSON */ }
-      done();
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const n = data.saved.length;
-        toast(data.warning || `Uploaded ${n === 1 ? data.saved[0] : `${n} files`}`, Boolean(data.warning));
-        // Leave a warning up long enough to read; the library shows it again after.
-        reloadSoon(data.warning ? 6000 : 900);
-      } else {
-        toast(data.error || `Upload failed (${xhr.status})`, true);
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (target) form.append("to", target);
+    let last = Date.now();
+    let sent = false;
+    const watchdog = setInterval(() => {
+      const limit = sent ? PROCESSING_SECONDS : STALL_SECONDS;
+      if (Date.now() - last > limit * 1000) {
+        clearInterval(watchdog);
+        xhr.abort();
+        resolve({ error: sent
+          ? "the frame took too long to save it"
+          : "the upload stalled — check the Wi-Fi and keep this page open", stalled: true });
       }
+    }, 2000);
+    xhr.upload.onprogress = (ev) => {
+      last = Date.now();
+      if (!ev.lengthComputable) return;
+      sent = ev.loaded >= ev.total;
+      onProgress(ev.loaded / ev.total);
+    };
+    xhr.upload.onload = () => { sent = true; last = Date.now(); onProgress(1); };
+    xhr.onload = () => {
+      clearInterval(watchdog);
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (_) { /* not JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else resolve({ error: data.error || `failed (${xhr.status})`, status: xhr.status });
     };
     xhr.onerror = () => {
-      done();
-      toast("Upload interrupted. Check the Wi-Fi connection and try again.", true);
+      clearInterval(watchdog);
+      resolve({ error: "the connection to the frame was lost", stalled: true });
     };
+    xhr.open("POST", "/api/media");
+    xhr.send(form);
+  });
+}
+
+async function keepAwake() {
+  // Stops the phone from sleeping (and pausing the upload) where it's supported.
+  try { return await navigator.wakeLock.request("screen"); } catch (_) { return null; }
+}
+
+const fileInput = $("#file");
+let uploading = false;
+window.addEventListener("beforeunload", (e) => { if (uploading) { e.preventDefault(); e.returnValue = ""; } });
+
+if (fileInput) {
+  fileInput.addEventListener("change", async () => {
+    const files = Array.from(fileInput.files);
+    if (!files.length || uploading) return;
+    const bar = $("#upload-progress");
+    const label = $(".upload-btn span");
+    const target = $("#upload-to")?.value || "";
+    const total = files.reduce((n, f) => n + f.size, 0);
+
+    // Room for everything? Each file briefly needs twice its size while it's saved.
+    try {
+      const space = await api("GET", "/api/space");
+      const tooBig = files.find((f) => f.size > space.max_upload_bytes);
+      if (tooBig) {
+        toast(`“${tooBig.name}” is ${fmtSize(tooBig.size)}; the limit is ${fmtSize(space.max_upload_bytes)} per file.`, true);
+        fileInput.value = "";
+        return;
+      }
+      const largest = Math.max(...files.map((f) => f.size));
+      const needed = total + largest + space.reserve_bytes;
+      if (space.free_bytes !== null && needed > space.free_bytes) {
+        toast(`Not enough space on the frame: ${files.length > 1 ? "these files need" : "this file needs"} ` +
+              `${fmtSize(total + largest)}, but only ${fmtSize(Math.max(0, space.free_bytes - space.reserve_bytes))} ` +
+              "is free. Delete some files or make them smaller first.", true);
+        fileInput.value = "";
+        return;
+      }
+    } catch (e) {
+      toast(e.message, true);
+      fileInput.value = "";
+      return;
+    }
+
+    uploading = true;
+    const lock = await keepAwake();
     bar.value = 0;
     bar.hidden = false;
-    label.textContent = count > 1 ? `Uploading ${count} files…` : "Uploading…";
-    xhr.send(new FormData(form));
+    const saved = [];
+    const failed = [];
+    const warnings = [];
+    let doneBytes = 0;
+    for (const [i, file] of files.entries()) {
+      const prefix = files.length > 1 ? `${i + 1} of ${files.length} · ` : "";
+      label.textContent = `${prefix}Uploading…`;
+      const result = await uploadOne(file, target, (fraction) => {
+        bar.value = Math.round(((doneBytes + fraction * file.size) / total) * 100);
+        label.textContent = fraction < 1
+          ? `${prefix}Uploading… ${Math.round(fraction * 100)}%`
+          : `${prefix}Processing…`;
+      });
+      doneBytes += file.size;
+      if (result.error) {
+        failed.push(`${file.name}: ${result.error}`);
+        // Out of space or a lost connection: the rest would fail the same way.
+        if (result.status === 507 || result.stalled) {
+          for (const rest of files.slice(i + 1)) failed.push(`${rest.name}: not uploaded`);
+          break;
+        }
+      } else {
+        saved.push(...(result.saved || []));
+        if (result.warning) warnings.push(result.warning);
+      }
+    }
+    uploading = false;
+    if (lock) lock.release().catch(() => {});
+    bar.hidden = true;
+    label.textContent = "Upload";
+    fileInput.value = "";
+
+    if (failed.length) {
+      const head = saved.length ? `Uploaded ${saved.length} of ${files.length}. ` : "Upload failed. ";
+      toast(head + failed.join(" · "), true);
+    } else if (warnings.length) {
+      toast(warnings.join(" "), true);
+    } else {
+      toast(saved.length === 1 ? `Uploaded ${saved[0]}` : `Uploaded ${saved.length} files`);
+    }
+    if (saved.length) reloadSoon(failed.length || warnings.length ? 7000 : 900);
   });
 }
 

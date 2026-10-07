@@ -148,6 +148,7 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             sound_intervals=SOUND_INTERVALS,
             accept=",".join(sorted(EXTENSIONS)),
             max_upload_mb=cfg.max_upload_mb,
+            free_bytes=_free_bytes(cfg.media_dir),
             version=__version__,
         )
 
@@ -181,6 +182,14 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     def api_status():
         return jsonify(ctl.status())
 
+    @app.get("/api/space")
+    def api_space():
+        # The page checks this before uploading: the web server stores a whole
+        # upload before Frame sees it, so the check after it arrives comes late.
+        return jsonify(free_bytes=_free_bytes(cfg.media_dir),
+                       reserve_bytes=cfg.reserve_mb * 1024 * 1024,
+                       max_upload_bytes=cfg.max_upload_mb * 1024 * 1024)
+
     @app.get("/api/media")
     def api_media():
         return jsonify(media=ctl.media(), free_bytes=_free_bytes(cfg.media_dir))
@@ -193,7 +202,8 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
         free = _free_bytes(cfg.media_dir)
         if free is not None and length + cfg.reserve_mb * 1024 * 1024 > free:
             raise MediaError(
-                f"not enough free space on the SD card ({free // (1024 * 1024)} MB free)", 507
+                f"not enough space on the frame: needs {length // 1048576} MB, "
+                f"{max(0, free - cfg.reserve_mb * 1048576) // 1048576} MB free", 507
             )
         files = request.files.getlist("file")
         if not files:

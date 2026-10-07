@@ -188,7 +188,12 @@ changes until you tap ▶ Play**.
 
 ### Upload
 In **Library**, tap **Upload files** and choose one or more files; the upload starts at
-once and shows its progress. Pick a playlist under **Add uploads to** to put them straight
+once and shows its progress. Files are sent one at a time ("2 of 5 · Uploading… 40%"), so one
+problem doesn't lose the whole batch, and the page checks first that they fit on the SD
+card (the Library shows how much space is free). If an upload stops moving for 45 seconds
+it's cancelled with a message instead of hanging; keep the page open while uploading
+(phones pause pages in the background — the page keeps the screen on where it can).
+Pick a playlist under **Add uploads to** to put them straight
 into it (artwork into its artwork, music into its sound); the default is the Library only. See
 [Supported files](#supported-files). The default size limit is 4 GB, and an upload is
 refused if it would leave less than 256 MB free on the SD card.
@@ -515,6 +520,15 @@ journalctl -u frame-player -b --no-pager | tail -50
   `video render audio`, then re-run the installer.
 - The service retries forever with backoff (up to 60 s between attempts), so once the
   cause is fixed it recovers by itself.
+
+### Upload stops or fails
+- The message says which file failed and why. **Not enough space**: delete files in the
+  Library or convert big videos (see [Preparing artwork](#preparing-artwork)). Check with
+  `df -h /var/lib/frame`.
+- **Stalled / connection lost**: usually Wi-Fi, or the phone pausing the page. Keep the
+  page in front and the screen on, move closer to the router, and try again; files that
+  finished are kept.
+- Details are in `journalctl -u frame-web -n 50`.
 
 ### `frame.local` doesn't resolve
 - Use the IP address instead: `http://<pi-ip>:8080`. `hostname -I` on the Pi shows it, or

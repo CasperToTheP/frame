@@ -662,3 +662,10 @@ def test_settings_from_before_active_existed(client, ctl, cfg):
     assert client.get("/api/status").get_json()["active"] == "Old"
     res = client.post("/api/saved/edit", json={"name": "Old", "interval": 60})
     assert res.get_json()["playing"] is True and state(ctl)["interval"] == 60
+
+
+def test_space_endpoint(client, cfg):
+    data = client.get("/api/space").get_json()
+    assert data["free_bytes"] > 0
+    assert data["reserve_bytes"] == cfg.reserve_mb * 1024 * 1024
+    assert data["max_upload_bytes"] == cfg.max_upload_mb * 1024 * 1024

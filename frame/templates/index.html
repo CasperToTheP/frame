@@ -284,7 +284,10 @@
   <section class="view" id="view-library" data-view="library" hidden aria-label="Library">
     <form id="upload-form" class="upload">
       <div class="title-row">
-        <h1 class="view-title">Library <span class="count">{{ media|length }}</span></h1>
+        <div>
+          <h1 class="view-title">Library <span class="count">{{ media|length }}</span></h1>
+          {% if free_bytes is not none %}<p class="sub space" id="space">{{ '%.1f'|format(free_bytes / 1073741824) }} GB free on the frame</p>{% endif %}
+        </div>
         <label class="btn primary upload-btn">
           {{ icon('upload') }}<span>Upload</span>
           <input type="file" name="file" id="file" accept="{{ accept }}" multiple hidden>
