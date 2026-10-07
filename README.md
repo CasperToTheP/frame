@@ -328,11 +328,11 @@ Example: `curl -X POST -H 'Content-Type: application/json' -d '{"volume":40}' ht
 | GIF video | `.gifv` | Saved as the `.mp4` or `.webm` video it really is. If the download turned out to be the web page instead, change `.gifv` to `.mp4` in the link and save that. |
 | Animation | `.gif` | Loops forever, including transparent GIFs. |
 | Image | `.jpg`, `.png`, `.webp`, `.bmp`, `.tif`/`.tiff` | Stays on screen. Transparency is shown on black. |
+| Animated WebP | `.webp` | Converted to an MP4 when uploaded (it can take a minute for long ones): same timing, transparency on black, at most 1920×1080. |
 | Vector image | `.svg` | Converted to a sharp PNG (1920 px on the longest side) when uploaded. |
 | Sound | `.mp3`, `.m4a`, `.aac`, `.wav`, `.flac`, `.ogg`, `.opus` | Chosen under **Sound**; loops on its own. |
 
-Not supported: **animated WebP** (the Pi's video library can't decode it; convert it, see
-[NFTs](#nfts)), HEIC/AVIF photos, and HTML or 3D (`.glb`) artwork, which needs a web
+Not supported: HEIC/AVIF photos, and HTML or 3D (`.glb`) artwork, which needs a web
 browser or a 3D engine the 1 GB Pi doesn't run.
 
 ## Preparing artwork
@@ -415,26 +415,14 @@ media link (often `ipfs://…` or an `arweave.net` link), and download that file
 `ipfs://<CID>/<file>` link can be opened in a browser as
 `https://ipfs.io/ipfs/<CID>/<file>`.
 
-**What works as-is:** MP4/MOV/WebM videos, GIFs, PNG/JPG/still WebP images, and on-chain
-SVG art (converted on upload). Transparent backgrounds show as black.
+**What works as-is:** MP4/MOV/WebM videos, GIFs, PNG/JPG/WebP images (animated WebP is
+converted on upload), and on-chain SVG art (converted on upload). Transparent backgrounds show as black.
 
 **Pixel art** (punks, 8-bit art and so on): set **Display → Scaling** to
 **Sharp (pixel art)**, otherwise enlarging a 24×24 image blurs it.
 
-**Animated WebP:** convert it to MP4 on your computer. ffmpeg can't read animated WebP
-before version 8, so use the `webp` tools to unpack it first:
-
-```bash
-# Debian/Ubuntu: sudo apt install webp   ·   macOS: brew install webp
-mkdir frames
-anim_dump -folder frames -prefix f_ art.webp            # one PNG per frame
-ffmpeg -framerate 12 -i frames/f_%04d.png \
-  -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=neighbor" \
-  -c:v libx264 -pix_fmt yuv420p -crf 18 art.mp4
-```
-
-Set `-framerate` to the animation's speed. Alternatively, convert it to a GIF with any
-online "WebP to GIF" converter.
+**Animated WebP:** just upload it; the frame converts it to an MP4 (the Pi's video
+library can't play animated WebP directly).
 
 **Music NFTs, or art with a separate audio file:** upload the visual and the audio file
 separately, then choose the audio under **Sound**.

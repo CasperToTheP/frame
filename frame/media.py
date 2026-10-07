@@ -307,10 +307,19 @@ class MediaLibrary:
                     f"file content does not look like a valid {ext} file", 415
                 )
             if ext == ".webp" and _animated_webp_file(tmp_path):
-                raise MediaError(
-                    "animated WebP can't be played on the Pi; convert it to MP4 or GIF "
-                    "first (see README, \"NFTs\")", 415
-                )
+                # mpv on the Pi can't decode animated WebP: store it as an MP4.
+                from .convert import animated_webp_to_mp4
+
+                mp4 = tmp_path.with_name(tmp_path.name + ".mp4")
+                try:
+                    animated_webp_to_mp4(tmp_path, mp4)
+                except BaseException:
+                    _unlink_quiet(mp4)
+                    raise
+                finally:
+                    _unlink_quiet(tmp_path)
+                tmp_path = mp4
+                name = name[: -len(ext)] + ".mp4"
             if ext == ".svg":
                 png = tmp_path.with_name(tmp_path.name + ".png")
                 try:

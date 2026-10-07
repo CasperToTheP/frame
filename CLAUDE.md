@@ -85,8 +85,11 @@ Key rules:
   was renamed in mpv 0.38 (`--alpha=blend` before, `--background=color` after), so the
   supervisor reads `mpv --version` and `alpha_args()` picks the right one.
 - SVG uploads are rendered to PNG with `rsvg-convert` (package `librsvg2-bin`), because
-  Bookworm's mpv can't open SVG. Animated WebP is refused at upload: no ffmpeg before 8.0
-  decodes it.
+  Bookworm's mpv can't open SVG. Animated WebP can't be decoded by any ffmpeg before 8.0,
+  so `convert.py` turns it into an H.264 MP4 at upload: Pillow decodes the frames one by
+  one, the `ffmpeg` command line encodes them (nice 19, 2 threads, short lookahead, in
+  frame-web's cgroup), at a constant 30 fps with each frame repeated for its duration.
+  This is the only conversion Frame does; Pillow is imported only for it.
 - Rotation (`video-rotate`) and fit (`keepaspect`/`panscan`) are mpv properties, so they
   change live. Display rotation is not done at the KMS level.
 - Hardware-specific code is isolated in `display.py` (sysfs/procfs) and `player.py`
@@ -147,7 +150,8 @@ Raspberry Pi OS keeps it in RAM and the cause of a problem before a reboot is ot
 ## Development principles
 
 - Simple, boring and reliable beats clever. One person must be able to maintain it.
-- Python + Flask + waitress only. No JS frameworks, no build step, no Docker, no
+- Python + Flask + waitress only (plus Pillow, used only to convert animated WebP).
+  No JS frameworks, no build step, no Docker, no
   database server, no Node.
 - Never run the web app as root. Keep the systemd hardening in the units.
 - Log events (startup, artwork change, upload, delete, errors, restarts), not periodic
@@ -190,6 +194,6 @@ state, and restarts running services. `doctor.sh` must stay read-only, and must 
 ## Non-goals (for now)
 
 Cloud hosting, user accounts, internet/remote control, Spotify, a marketplace,
-AI generation, automatic transcoding, motion sensors, Home Assistant, complex schedules,
+AI generation, automatic transcoding (beyond animated WebP and SVG, which mpv can't open), motion sensors, Home Assistant, complex schedules,
 multi-screen, mobile apps, Docker. Scheduled screen on/off is a planned future feature:
 keep display power logic in `display.py`, driven by the player service.

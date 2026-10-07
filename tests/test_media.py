@@ -1,4 +1,7 @@
+import json
 import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -160,15 +163,50 @@ def test_kinds():
     assert kind_of("x.txt") is None
 
 
-def test_still_webp_accepted_animated_rejected(lib):
+def test_still_webp_accepted_broken_animated_refused(lib):
     assert upload(lib, "still.webp", WEBP) == "still.webp"
     f = lib.new_incoming_file()
-    f.write(WEBP_ANIMATED)
+    f.write(WEBP_ANIMATED)  # an animated-WebP header with nothing behind it
     f.close()
     with pytest.raises(MediaError, match="animated WebP") as e:
         lib.add(f.name, "anim.webp")
     assert e.value.status == 415
     assert not os.path.exists(f.name)
+    assert [p.name for p in lib.incoming.iterdir()] == []
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_animated_webp_becomes_mp4(lib, tmp_path):
+    from frame.convert import FPS
+
+    src = tmp_path / "make.webp"
+    # 24 frames at 12 fps with transparency = 2 seconds.
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "testsrc2=s=401x301:r=12:d=2,format=rgba",
+                    "-c:v", "libwebp_anim", "-loop", "0", str(src)], check=True)
+    f = lib.new_incoming_file()
+    f.write(src.read_bytes())
+    f.close()
+    assert lib.add(f.name, "Punk 42.webp") == "Punk_42.mp4"
+    out = lib.dir / "Punk_42.mp4"
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+         "stream=codec_name,width,height,pix_fmt,nb_read_frames", "-of", "json", str(out)],
+        capture_output=True, text=True, check=True).stdout
+    stream = json.loads(probe)["streams"][0]
+    assert (stream["codec_name"], stream["pix_fmt"]) == ("h264", "yuv420p")
+    assert (stream["width"], stream["height"]) == (400, 300)  # even sides
+    assert abs(int(stream["nb_read_frames"]) - 2 * FPS) <= 2  # timing kept
+    assert [p.name for p in lib.incoming.iterdir()] == []
+
+
+def test_fit_even():
+    from frame.convert import fit_even
+
+    assert fit_even(401, 301) == (400, 300)
+    assert fit_even(3840, 2160) == (1920, 1080)
+    assert fit_even(1000, 4000) == (270, 1080)
+    assert fit_even(1, 1) == (2, 2)
 
 
 def test_svg_without_converter_is_a_clear_error(lib, monkeypatch):

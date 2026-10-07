@@ -62,7 +62,7 @@ step "Installing system packages (mpv, Python, Avahi, ALSA tools, SVG renderer, 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
-  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates librsvg2-bin   dnsmasq-base iw
+  mpv python3 python3-venv avahi-daemon alsa-utils rsync ca-certificates librsvg2-bin ffmpeg   dnsmasq-base iw
 info "$(mpv --version | head -n1)"
 
 PY_OK=$(python3 -c 'import sys; print(int(sys.version_info >= (3, 11)))')

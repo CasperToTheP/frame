@@ -46,7 +46,7 @@ def mpv_thumbnail_args(mpv_bin: str, src: Path, outdir: Path, kind: str) -> list
     ]
 
 
-def _lower_priority() -> None:  # runs in the child before exec
+def lower_priority() -> None:  # runs in the child before exec
     try:
         os.nice(19)
     except OSError:
@@ -61,7 +61,7 @@ def _lower_priority() -> None:  # runs in the child before exec
 def run_mpv(args: list[str]) -> None:
     subprocess.run(args, check=True, timeout=TIMEOUT, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                   preexec_fn=_lower_priority if os.name == "posix" else None)
+                   preexec_fn=lower_priority if os.name == "posix" else None)
 
 
 def _describe(exc: Exception) -> str:

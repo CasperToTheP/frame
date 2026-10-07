@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "Flask>=2.2,<4",
     "waitress>=2.1,<4",
+    "Pillow>=10",
 ]
 
 [project.optional-dependencies]

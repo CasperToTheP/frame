@@ -563,7 +563,8 @@ if (fileInput) {
       if (!ev.lengthComputable) return;
       const pct = Math.round((ev.loaded / ev.total) * 100);
       bar.value = pct;
-      label.textContent = `Uploading… ${pct}%`;
+      // At 100% the frame may still be converting (animated WebP) or checking the file.
+      label.textContent = pct < 100 ? `Uploading… ${pct}%` : "Processing…";
     };
     const done = () => {
       bar.hidden = true;

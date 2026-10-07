@@ -1,3 +1,5 @@
 # Runtime dependencies (installed into /opt/frame/venv by scripts/install.sh).
 Flask>=2.2,<4
 waitress>=2.1,<4
+# Only for converting animated WebP uploads (frame/convert.py).
+Pillow>=10
