@@ -881,6 +881,82 @@ function uploadOne(file, target, onProgress) {
   });
 }
 
+// Before uploading, ask the frame which files it already has. Flagged files start
+// left out of the upload; the user can put them back (or take others out).
+// Resolves with the files to upload, or null if cancelled.
+async function reviewUploads(files) {
+  let checks;
+  try {
+    const data = await api("POST", "/api/media/check",
+                           { files: files.map((f) => ({ name: f.name, size: f.size })) });
+    checks = data.files;
+  } catch (_) {
+    return files;  // can't check: upload as before
+  }
+  const flagged = checks.filter((c) => c.status !== "ok").length;
+  const dialog = $("#upload-review");
+  if (!flagged || !dialog) return files;
+
+  const rows = files.map((file, i) => ({ file, check: checks[i] || { status: "ok" } }));
+  for (const row of rows) row.keep = row.check.status === "ok" || row.check.status === "same_name";
+  rows.sort((a, b) => Number(a.check.status === "ok") - Number(b.check.status === "ok"));
+
+  const dupes = checks.filter((c) => c.status === "duplicate" || c.status === "twice").length;
+  $("#review-title").textContent = dupes
+    ? `${dupes} of ${files.length} ${dupes === 1 ? "file is" : "files are"} already on the frame`
+    : `Check ${flagged === 1 ? "this file" : "these files"} before uploading`;
+  $("#review-sub").textContent = "Files already on the frame are left out. Tap Keep to upload one anyway, "
+    + "or Remove to leave out any other file.";
+
+  const list = $("#review-list");
+  const go = $("#review-go");
+  const render = () => {
+    list.replaceChildren(...rows.map((row) => {
+      const { file, check } = row;
+      const li = document.createElement("li");
+      li.className = `review-row ${check.status}` + (row.keep ? "" : " out");
+      const text = document.createElement("span");
+      text.className = "q-name";
+      const name = document.createElement("span");
+      name.className = "rv-name";
+      name.textContent = file.name;
+      text.append(name);
+      const small = document.createElement("small");
+      const renamed = check.existing && check.existing !== file.name ? ` as ${check.existing}` : "";
+      const where = renamed + (check.folder ? ` in “${check.folder}”` : "");
+      small.textContent = check.status === "ok" ? fmtSize(file.size)
+        : check.status === "duplicate" ? `Already on the frame${where}`
+        : check.status === "twice" ? "Chosen twice"
+        : check.message || check.status;
+      small.className = check.status === "ok" ? "" : "warn";
+      text.append(small);
+      li.append(text);
+      if (check.status !== "unsupported") {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn small" + (row.keep ? " ghost" : "");
+        b.textContent = row.keep ? "Remove" : "Keep";
+        b.addEventListener("click", () => { row.keep = !row.keep; render(); });
+        li.append(b);
+      }
+      return li;
+    }));
+    const n = rows.filter((r) => r.keep).length;
+    go.disabled = n === 0;
+    $("span", go).textContent = n ? `Upload ${n}` : "Nothing to upload";
+  };
+  render();
+
+  return new Promise((resolve) => {
+    let answer = null;
+    const onGo = () => { answer = files.filter((f) => rows.find((r) => r.file === f).keep); dialog.close(); };
+    go.addEventListener("click", onGo);
+    dialog.addEventListener("close", () => { go.removeEventListener("click", onGo); resolve(answer); },
+                            { once: true });
+    dialog.showModal();
+  });
+}
+
 async function keepAwake() {
   // Stops the phone from sleeping (and pausing the upload) where it's supported.
   try { return await navigator.wakeLock.request("screen"); } catch (_) { return null; }
@@ -892,8 +968,12 @@ window.addEventListener("beforeunload", (e) => { if (uploading) { e.preventDefau
 
 if (fileInput) {
   fileInput.addEventListener("change", async () => {
-    const files = Array.from(fileInput.files);
-    if (!files.length || uploading) return;
+    if (!fileInput.files.length || uploading) return;
+    const files = await reviewUploads(Array.from(fileInput.files));
+    if (!files || !files.length) {
+      fileInput.value = "";
+      return;
+    }
     const bar = $("#upload-progress");
     const label = $(".upload-btn span");
     const target = $("#upload-to")?.value || "";

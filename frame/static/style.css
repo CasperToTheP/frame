@@ -573,3 +573,15 @@ body.selecting .mini { display: none; }
 .list-choice { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-choice.current { border-color: var(--accent); }
 .list-choice.current::after { content: "here"; margin-left: auto; color: var(--accent); font-size: .85rem; }
+
+/* Upload review: files already on the frame */
+.review-list { list-style: none; margin: 0; padding: 0; max-height: 52vh; overflow-y: auto; }
+.review-row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; }
+.review-row + .review-row { border-top: 1px solid var(--line); }
+.review-row .q-name { font-size: .92rem; }
+.review-row .q-name small { color: var(--muted); font-weight: 500; font-size: .78rem; }
+.review-row .q-name small.warn { color: var(--warn); font-weight: 600; }
+.review-row.out .q-name { opacity: .5; }
+.review-row.out .rv-name { text-decoration: line-through; }
+#review-go { white-space: nowrap; }
+.review-row .btn.small { flex: none; min-width: 84px; }

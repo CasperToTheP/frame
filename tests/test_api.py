@@ -780,3 +780,37 @@ def test_deleted_file_leaves_its_folder(client, ctl):
     client.delete("/api/media/a.mp4")
     assert ctl.folders.load()["files"] == {}
     assert folders(client)["F"]["count"] == 0
+
+
+def test_check_uploads_flags_files_already_on_the_frame(client):
+    big = MP4 + b"\0" * 70000
+    post_file(client, "Kyoto Rain.mp4", big)
+    post_file(client, "b.png", PNG)
+    client.post("/api/folders", json={"name": "Japan"})
+    client.post("/api/media/move", json={"files": ["Kyoto_Rain.mp4"], "folder": "Japan"})
+    res = client.post("/api/media/check", json={"files": [
+        {"name": "Kyoto Rain.mp4", "size": len(big)},      # same name and size
+        {"name": "renamed copy.mp4", "size": len(big)},    # same size, other name
+        {"name": "b.png", "size": len(PNG) + 1},           # same name, different file
+        {"name": "new.png", "size": len(PNG)},             # small: size alone isn't enough
+        {"name": "new.png", "size": len(PNG)},             # chosen twice
+        {"name": "notes.txt", "size": 10},
+    ]})
+    out = [(f["status"], f.get("existing"), f.get("folder")) for f in res.get_json()["files"]]
+    assert out == [
+        ("duplicate", "Kyoto_Rain.mp4", "Japan"),
+        ("duplicate", "Kyoto_Rain.mp4", "Japan"),
+        ("same_name", "b.png", ""),
+        ("ok", None, None),
+        ("twice", None, None),
+        ("unsupported", None, None),
+    ]
+    assert client.post("/api/media/check", json={"files": "x"}).status_code == 400
+
+
+def test_check_uploads_knows_converted_names(client):
+    if not shutil.which("rsvg-convert"):
+        pytest.skip("needs rsvg-convert")
+    post_file(client, "logo.svg", SVG)  # stored as logo.png
+    res = client.post("/api/media/check", json={"files": [{"name": "logo.svg", "size": 5}]})
+    assert res.get_json()["files"][0]["status"] == "same_name"

@@ -205,8 +205,11 @@ changes until you tap ▶ Play**.
 - Deleting a playlist doesn't stop the frame. Deleting a file removes it from every playlist.
 
 ### Upload
-In **Library**, tap **Upload files** and choose one or more files; the upload starts at
-once and shows its progress. Files are sent one at a time ("2 of 5 · Uploading… 40%"), so one
+In **Library**, tap **Upload files** and choose one or more files. If some of them are
+already on the frame (same name and size, or an identical-size copy under another name),
+the same file chosen twice, or a type Frame can't play, a list opens first: those files are
+left out (tap **Keep** to upload one anyway, or **Remove** to leave out any other), then
+**Upload**. Otherwise the upload starts at once and shows its progress. Files are sent one at a time ("2 of 5 · Uploading… 40%"), so one
 problem doesn't lose the whole batch, and the page checks first that they fit on the SD
 card (the Library shows how much space is free). If an upload stops moving for 45 seconds
 it's cancelled with a message instead of hanging; keep the page open while uploading
@@ -319,6 +322,7 @@ The UI uses a small JSON API that you can also script against:
 | `GET /api/status` | | what's playing (`now`: position, count, next change), playlists, settings, player health |
 | `GET /api/media` | | list of files (+ free disk space) |
 | `POST /api/media` | multipart `file` (one or more; + optional `add=1` or `play=1`, `folder`) | upload |
+| `POST /api/media/check` | `{"files": [{"name": "a.mp4", "size": 123}]}` | before uploading: per file, `status` `ok`, `duplicate` (+ `existing`, `folder`), `same_name`, `twice` or `unsupported` |
 | `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for files in the playlist or sound list) |
 | `POST /api/play` | `{"filename": "art.mp4"}` | show only this artwork |
 | `POST /api/add` | `{"filename": "art.mp4"}` | add to the playlist (or, for audio, the sound list) |

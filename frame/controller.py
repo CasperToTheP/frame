@@ -29,7 +29,7 @@ from .folders import (
     is_within,
     ref_path,
 )
-from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
+from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of, safe_name
 from .mediainfo import pi_warning
 from .netwatch import read_status as read_network_status
 from .player import (
@@ -598,6 +598,62 @@ class Controller:
                  thumb=self.thumbs.version(item.name) if item.kind != "audio" else None)
             for item in self.library.list()
         ]
+
+    def check_uploads(self, files: Any) -> list[dict[str, Any]]:
+        """Before uploading: which of the chosen files (``[{"name", "size"}]``) are
+        already on the frame, would get a new name, are chosen twice, or can't be
+        uploaded at all. Only advice: the page lets the user decide.
+
+        A file is "already there" when a file with the name it would be saved under
+        has the same size, or (for anything over 64 KB) any file of the same kind has
+        exactly its size: that's a copy saved under another name, or "name-1".
+        """
+        if not isinstance(files, list) or len(files) > 1000:
+            raise MediaError("files must be a list of {name, size}")
+        existing = {item.name: item for item in self.library.list()}
+        by_size: dict[tuple[str | None, int], list[str]] = {}
+        for item in existing.values():
+            by_size.setdefault((item.kind, item.size), []).append(item.name)
+        folders = self.folders.load()["files"]
+        seen: set[tuple[str, int]] = set()
+        out = []
+        for f in files:
+            raw = f.get("name") if isinstance(f, dict) else None
+            size = f.get("size") if isinstance(f, dict) else None
+            size = size if isinstance(size, int) and size >= 0 else -1
+            result: dict[str, Any] = {"name": raw, "status": "ok"}
+            out.append(result)
+            try:
+                stored = safe_name(raw if isinstance(raw, str) else "")
+            except MediaError as exc:
+                result.update(status="unsupported", message=str(exc))
+                continue
+            stem, ext = os.path.splitext(stored)
+            # What it would be saved as (SVG and animated WebP are converted, so their
+            # size on the frame differs; a .gifv is only renamed).
+            names = {".svg": [stem + ".png"], ".webp": [stored, stem + ".mp4"],
+                     ".gifv": [stem + ".mp4", stem + ".webm"]}.get(ext, [stored])
+            same_size = ext not in (".svg", ".webp")
+            kind = kind_of(names[0])
+            match = next((n for n in names if n in existing and same_size
+                          and existing[n].size == size), None)
+            if match is None and same_size and size >= 65536:
+                match = next(iter(sorted(by_size.get((kind, size), []))), None)
+            if (stored.lower(), size) in seen:
+                result.update(status="twice", message="chosen twice")
+            elif match:
+                result.update(status="duplicate", existing=match,
+                              folder=folders.get(match, ""), message="already on the frame")
+            elif any(n in existing for n in names):
+                taken = next(n for n in names if n in existing)
+                result.update(status="same_name", existing=taken,
+                              folder=folders.get(taken, ""),
+                              message=(f"a different file called {taken} is on the frame; "
+                                       "this one gets a new name") if same_size else
+                                      f"a file called {taken} is already on the frame; "
+                                      "uploading adds a copy")
+            seen.add((stored.lower(), size))
+        return out
 
     def heavy_warning(self, name: str) -> str | None:
         """Advice if ``name`` is likely too heavy for a Pi 4 (None if fine or unknown)."""

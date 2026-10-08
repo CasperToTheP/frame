@@ -195,6 +195,12 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     def api_media():
         return jsonify(media=ctl.media(), free_bytes=_free_bytes(cfg.media_dir))
 
+    @app.post("/api/media/check")
+    def api_check_uploads():
+        # {"files": [{"name": "a.mp4", "size": 123}, ...]}: asked before uploading, to
+        # flag files that are already on the frame (the upload itself would add a copy).
+        return jsonify(files=ctl.check_uploads(_json_body().get("files")))
+
     @app.post("/api/media")
     def api_upload():
         length = request.content_length

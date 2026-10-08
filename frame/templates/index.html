@@ -373,6 +373,19 @@
       <button class="icon-btn" data-sel="cancel" aria-label="Stop selecting">{{ icon('x') }}</button>
     </div>
 
+    {# Before uploading: files that are already on the frame, filled by app.js. #}
+    <dialog id="upload-review" class="sheet picker" aria-labelledby="review-title">
+      <form method="dialog" class="sheet-inner">
+        <h2 id="review-title"></h2>
+        <p class="sub" id="review-sub"></p>
+        <ul class="review-list" id="review-list"></ul>
+        <div class="row-buttons split">
+          <button value="" class="btn ghost">Cancel</button>
+          <button type="button" class="btn primary" id="review-go">{{ icon('upload') }}<span>Upload</span></button>
+        </div>
+      </form>
+    </dialog>
+
     {# A list of choices (move to which folder, add to which playlist...), filled by app.js. #}
     <dialog id="chooser" class="sheet" aria-labelledby="chooser-title">
       <form method="dialog" class="sheet-inner">
