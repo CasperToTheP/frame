@@ -21,6 +21,14 @@ from typing import Any
 from . import display
 from .config import Config
 from .director import NEXT_SOUND, NEXT_VISUAL
+from .folders import (
+    FolderStore,
+    clean_path,
+    folder_ref,
+    is_folder_ref,
+    is_within,
+    ref_path,
+)
 from .media import VISUAL_KINDS, MediaError, MediaLibrary, kind_of
 from .mediainfo import pi_warning
 from .netwatch import read_status as read_network_status
@@ -51,6 +59,7 @@ class Controller:
         # The audio-only mpv that loops a separate soundtrack.
         self.audio_ipc = audio_ipc or MpvIpc(cfg.audio_socket)
         self.thumbs = Thumbnails(self.library, cfg.thumb_dir, cfg.mpv_bin)
+        self.folders = FolderStore(cfg.library_file)
 
     # --- status -------------------------------------------------------------
 
@@ -71,6 +80,7 @@ class Controller:
             "sound_shuffle": state["sound_shuffle"],
             "fade": state["fade"],
             "saved": self._saved_summary(state),
+            "folders": self.folder_summary(),
             "active": self.active_name(state),
             "volume": state["volume"],
             "muted": state["muted"],
@@ -237,18 +247,41 @@ class Controller:
             return next((n for n, e in state["saved"].items() if e == current), None)
         return None
 
+    def _expanded(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """A saved playlist with its folders replaced by the files in them, as played."""
+        names = [item.name for item in self.library.list()]
+        visuals = [n for n in names if kind_of(n) in VISUAL_KINDS]
+        audio = [n for n in names if kind_of(n) == "audio"]
+        return dict(entry, playlist=self.folders.expand(entry["playlist"], visuals),
+                    sounds=self.folders.expand(entry["sounds"], audio))
+
+    def _refresh_active(self) -> None:
+        """Folder contents changed: the playing playlist follows its folders."""
+        state = self.state.load()
+        name = state["active"]
+        entry = state["saved"].get(name) if name else None
+        if not entry or not any(is_folder_ref(i) for i in entry["playlist"] + entry["sounds"]):
+            return
+        played = self._expanded(entry)
+        changes = {k: played[k] for k in ("playlist", "sounds") if played[k] != state[k]}
+        if changes:
+            self.state.update(**changes)
+            log.info("playlist %r follows its folders", name)
+
     def _saved_summary(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         active = self.active_name(state)
         out = []
         for name, entry in state["saved"].items():
-            visuals = self.library.playable(entry["playlist"], VISUAL_KINDS)
+            played = self._expanded(entry)
+            visuals = self.library.playable(played["playlist"], VISUAL_KINDS)
             out.append({
                 "name": name,
                 "items": entry["playlist"], "sounds": entry["sounds"],
                 "interval": entry["interval"], "shuffle": entry["shuffle"],
                 "sound_interval": entry["sound_interval"],
                 "sound_shuffle": entry["sound_shuffle"], "fade": entry["fade"],
-                "count": len(entry["playlist"]), "sound_count": len(entry["sounds"]),
+                "count": len(visuals),
+                "sound_count": len(self.library.playable(played["sounds"], ("audio",))),
                 "first": visuals[0] if visuals else None,
                 "covers": visuals[:4],  # up to four pictures for the cover
                 "active": name == active,
@@ -307,8 +340,13 @@ class Controller:
                 items = changes[key]
                 if not isinstance(items, list) or not all(isinstance(n, str) for n in items):
                     raise MediaError(f"{key} must be a list of filenames")
+                folders = self.folders.load()["folders"]
                 for item in items:
-                    self._check(item, kinds, "not allowed in this list")
+                    if is_folder_ref(item):
+                        if ref_path(item) not in folders:
+                            raise MediaError(f"no folder called {ref_path(item)!r}", 404)
+                    else:
+                        self._check(item, kinds, "not allowed in this list")
                 entry["playlist" if key == "items" else "sounds"] = items
         for key in ("interval", "shuffle", "sound_interval", "sound_shuffle", "fade"):
             if key in changes:
@@ -322,13 +360,19 @@ class Controller:
         update: dict[str, Any] = {"saved": saved}
         playing = self.active_name(state) == name
         if playing:
-            update.update({k: entry[k] for k in SAVED_KEYS}, active=new_name)
+            update.update(self._expanded({k: entry[k] for k in SAVED_KEYS}), active=new_name)
         state = self.state.update(**update)
         log.info("edited playlist %r%s", new_name, " (playing)" if playing else "")
         return {"name": new_name, "playing": playing}
 
-    def add_to_playlist(self, name: Any, filename: str) -> dict[str, Any]:
-        """Append a file to a saved playlist: artwork to its artwork, music to its sound."""
+    def add_to_playlist(self, name: Any, filename: str | None = None,
+                        folder: str | None = None) -> dict[str, Any]:
+        """Append a file to a saved playlist: artwork to its artwork, music to its sound.
+        Or a whole folder, which stays linked: what's added to it later plays too."""
+        if folder is not None:
+            return self._add_folder_to_playlist(name, folder)
+        if not isinstance(filename, str):
+            raise MediaError("filename or folder is required")
         self.library.resolve(filename)
         _, entry = self._saved_entry(self.state.load(), name)
         if kind_of(filename) == "audio":
@@ -342,12 +386,31 @@ class Controller:
         return dict(self.edit_playlist(name, {"items": entry["playlist"] + [filename]}),
                     added=True)
 
+    def _add_folder_to_playlist(self, name: Any, folder: Any) -> dict[str, Any]:
+        path = clean_path(folder)
+        if path not in self.folders.load()["folders"]:
+            raise MediaError(f"no folder called {path!r}", 404)
+        _, entry = self._saved_entry(self.state.load(), name)
+        ref = folder_ref(path)
+        inside = self.folders.expand([ref], [i.name for i in self.library.list()])
+        changes: dict[str, Any] = {}
+        has_audio = any(kind_of(n) == "audio" for n in inside)
+        has_visual = any(kind_of(n) in VISUAL_KINDS for n in inside)
+        if (has_visual or not has_audio) and ref not in entry["playlist"]:
+            changes["items"] = entry["playlist"] + [ref]
+        if has_audio and ref not in entry["sounds"]:
+            changes["sounds"] = entry["sounds"] + [ref]
+        if not changes:
+            return {"name": saved_name(name), "added": False}
+        return dict(self.edit_playlist(name, changes), added=True)
+
     def load_playlist(self, name: Any) -> dict[str, Any]:
         """Play a saved playlist (its artwork, sounds, timing and fade)."""
         name, entry = self._saved_entry(self.state.load(), name)
-        if not self.library.playable(entry["playlist"], VISUAL_KINDS):
+        played = self._expanded(entry)
+        if not self.library.playable(played["playlist"], VISUAL_KINDS):
             raise MediaError(f"“{name}” has no artwork yet; add some first")
-        self.state.update(**entry, blank=False, active=name)
+        self.state.update(**played, blank=False, active=name)
         log.info("playing playlist %r", name)
         return self._offline_warning()
 
@@ -438,11 +501,96 @@ class Controller:
 
     # --- library ------------------------------------------------------------
 
+    # --- folders --------------------------------------------------------------
+
+    def folder_summary(self) -> list[dict[str, Any]]:
+        data = self.folders.load()
+        items = self.library.list()
+        out = []
+        for path in data["folders"]:
+            inside = [i for i in items if is_within(data["files"].get(i.name, ""), path)]
+            visuals = [i.name for i in inside if i.kind in VISUAL_KINDS]
+            out.append({
+                "path": path, "name": path.rsplit("/", 1)[-1],
+                "parent": path.rsplit("/", 1)[0] if "/" in path else "",
+                "count": len(inside), "visuals": len(visuals),
+                "audio": len(inside) - len(visuals), "covers": visuals[:4],
+            })
+        return out
+
+    def create_folder(self, parent: Any, name: Any) -> dict[str, Any]:
+        return {"path": self.folders.create(parent, name)}
+
+    def rename_folder(self, path: Any, name: Any) -> dict[str, Any]:
+        return self._folder_moved(*self.folders.rename(path, name))
+
+    def move_folder(self, path: Any, parent: Any) -> dict[str, Any]:
+        return self._folder_moved(*self.folders.move_folder(path, parent))
+
+    def _folder_moved(self, old: str, new: str) -> dict[str, Any]:
+        """Playlists that hold the folder (or one inside it) follow it."""
+        self._rewrite_folder_refs(lambda p: new + p[len(old):]
+                                  if p == old or p.startswith(old + "/") else p)
+        self._refresh_active()
+        return {"path": new}
+
+    def delete_folder(self, path: Any) -> dict[str, Any]:
+        """The folder goes; its files move up a level. Playlists that held the folder
+        keep the files it had, as separate items."""
+        path = clean_path(path)
+        names = [i.name for i in self.library.list()]
+        snapshot = {}
+        for p in self.folders.load()["folders"]:
+            if is_within(p, path):
+                snapshot[folder_ref(p)] = self.folders.expand([folder_ref(p)], names)
+        parent = self.folders.delete(path)
+        state = self.state.load()
+        saved = {}
+        for title, entry in state["saved"].items():
+            entry = dict(entry)
+            for key, kinds in (("playlist", VISUAL_KINDS), ("sounds", ("audio",))):
+                items: list[str] = []
+                for item in entry[key]:
+                    if item in snapshot:
+                        items.extend(n for n in snapshot[item] if kind_of(n) in kinds)
+                    else:
+                        items.append(item)
+                entry[key] = list(dict.fromkeys(items))
+            saved[title] = entry
+        if saved != state["saved"]:
+            self.state.update(saved=saved)
+        self._refresh_active()
+        return {"parent": parent}
+
+    def move_files(self, names: Any, folder: Any) -> dict[str, Any]:
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+            raise MediaError("files must be a list of filenames")
+        for name in names:
+            self.library.resolve(name)
+        folder = self.folders.move(names, folder)
+        log.info("moved %d file(s) to %s", len(names), folder or "the top of the library")
+        self._refresh_active()
+        return {"folder": folder, "moved": len(names)}
+
+    def _rewrite_folder_refs(self, change) -> None:
+        state = self.state.load()
+        saved = {
+            title: dict(entry, **{k: [folder_ref(change(ref_path(i))) if is_folder_ref(i) else i
+                                      for i in entry[k]] for k in ("playlist", "sounds")})
+            for title, entry in state["saved"].items()
+        }
+        if saved != state["saved"]:
+            self.state.update(saved=saved)
+
+    # --- library ------------------------------------------------------------
+
     def media(self) -> list[dict[str, Any]]:
         state = self.state.load()
         now = self._now_playing(state, self._supervisor_status().get("playlist"))
+        files = self.folders.load()["files"]
         return [
             dict(item.to_dict(),
+                 folder=files.get(item.name, ""),
                  in_playlist=item.name in state["playlist"],
                  in_sounds=item.name in state["sounds"],
                  playing=item.name in (now["visual"]["current"], now["sound"]["current"]),
@@ -478,6 +626,7 @@ class Controller:
             self.state.update(saved=saved)
         self.library.delete(name)
         self.thumbs.remove(name)
+        self.folders.forget(name)
         log.info("deleted %s", name)
 
     # --- helpers ------------------------------------------------------------

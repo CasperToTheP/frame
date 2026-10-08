@@ -15,7 +15,8 @@
 <body data-now="{{ now|tojson|forceescape }}"
       data-kinds="{{ kinds|tojson|forceescape }}"
       data-saved="{{ status.saved|map(attribute='name')|list|tojson|forceescape }}"
-      data-live="{{ (status.playlist + status.sounds)|tojson|forceescape }}">
+      data-live="{{ (status.playlist + status.sounds)|tojson|forceescape }}"
+      data-folders="{{ status.folders|tojson|forceescape }}">
 
 {# --- icons ------------------------------------------------------------------ #}
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -37,7 +38,10 @@
   <symbol id="i-image" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></g></symbol>
   <symbol id="i-film" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z" fill="currentColor"/></g></symbol>
   <symbol id="i-gif" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/></g><text x="12" y="15.5" text-anchor="middle" font-size="7.5" font-weight="700" font-family="system-ui,sans-serif" fill="currentColor">GIF</text></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5.5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18.5" cy="12" r="1.8"/></g></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></g></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></g></symbol>
 </svg>
 
@@ -64,14 +68,28 @@
   </select>
 {%- endmacro %}
 
+{# A folder's picture: up to four of its artworks, or a folder icon. #}
+{% macro folder_cover(f) -%}
+  {% if f and f.covers|length >= 4 %}<span class="mosaic-cover">{% for c in f.covers %}<span class="cell">{{ preview(c) }}</span>{% endfor %}</span>
+  {% elif f and f.covers %}{{ preview(f.covers[0]) }}<span class="folder-badge">{{ icon('folder') }}</span>
+  {% else %}<span class="ph ph-folder">{{ icon('folder') }}</span>{% endif %}
+{%- endmacro %}
+
 {# The artwork or sound list of a saved playlist, in its editor. #}
 {% macro edit_list(field, items, now_name, empty_text) -%}
   {% if items %}
   <ol class="queue">
     {% for name in items %}
+    {% if name.startswith('folder:') %}
+    {% set f = folder_index.get(name[7:]) %}
+    <li class="folder-row">
+      <span class="thumb">{{ folder_cover(f) }}</span>
+      <span class="q-name">{{ icon('folder', 'inline') }}{{ name[7:] }}<small class="{{ '' if f else 'warn' }}">{% if f %}Whole folder · {{ f.audio if field == 'sounds' else f.visuals }} {{ 'track' if field == 'sounds' else 'artwork' }}{{ '' if (f.audio if field == 'sounds' else f.visuals) == 1 else 's' }}{% else %}Folder missing{% endif %}</small></span>
+    {% else %}
     <li class="{{ 'playing' if name == now_name else '' }}">
       <span class="thumb">{{ preview(name) }}</span>
       <span class="q-name">{{ name }}{% if name == now_name %}<small>On the frame now</small>{% endif %}{% if name not in media_index %}<small class="warn">File missing</small>{% endif %}</span>
+    {% endif %}
       <span class="q-actions">
         <button class="icon-btn" data-ed-move="{{ field }}" data-index="{{ loop.index0 }}" data-delta="-1" aria-label="Move up" {{ 'disabled' if loop.first else '' }}>{{ icon('up') }}</button>
         <button class="icon-btn" data-ed-move="{{ field }}" data-index="{{ loop.index0 }}" data-delta="1" aria-label="Move down" {{ 'disabled' if loop.last else '' }}>{{ icon('down') }}</button>
@@ -299,25 +317,44 @@
           {% for p in status.saved %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
         </select>
       </label>
+      <p class="hint" id="upload-folder-hint"></p>
       <progress id="upload-progress" max="100" value="0" hidden></progress>
       <p class="hint">Video (MP4 works best), GIF / GIFV, images incl. SVG, and music. Up to {{ max_upload_mb // 1024 if max_upload_mb >= 1024 else max_upload_mb }} {{ 'GB' if max_upload_mb >= 1024 else 'MB' }} per file.</p>
     </form>
 
-    {% if media %}
-    <div class="filters" role="tablist" aria-label="Show">
-      <button class="filter active" data-filter="all" role="tab" aria-selected="true">All</button>
-      <button class="filter" data-filter="visual" role="tab" aria-selected="false">Artwork</button>
-      <button class="filter" data-filter="audio" role="tab" aria-selected="false">Music</button>
+    <nav class="crumbs" id="crumbs" aria-label="Folder"></nav>
+    <div class="lib-tools">
+      <div class="filters" role="tablist" aria-label="Show">
+        <button class="filter active" data-filter="all" role="tab" aria-selected="true">All</button>
+        <button class="filter" data-filter="visual" role="tab" aria-selected="false">Artwork</button>
+        <button class="filter" data-filter="audio" role="tab" aria-selected="false">Music</button>
+      </div>
+      <div class="tool-buttons">
+        <button class="btn small" data-new-folder>{{ icon('folder') }}New folder</button>
+        {% if media %}<button class="btn small" id="btn-select">Select</button>{% endif %}
+      </div>
     </div>
-    <div class="tiles">
+
+    <div class="tiles" id="lib-tiles">
+      {% for f in status.folders %}
+      <div class="tile folder-tile" data-folder-tile="{{ f.path }}" data-parent="{{ f.parent }}">
+        <a class="tile-hit" href="#library/{{ f.path|urlencode }}" aria-label="Open folder {{ f.name }}">
+          <span class="tile-media">{{ folder_cover(f) }}</span>
+          <span class="tile-name">{{ icon('folder', 'inline') }}{{ f.name }}</span>
+          <span class="tile-meta">{{ f.count }} item{{ '' if f.count == 1 else 's' }}</span>
+        </a>
+        <button class="corner-btn" data-folder-menu="{{ f.path }}" aria-label="Folder options for {{ f.name }}">{{ icon('dots') }}</button>
+      </div>
+      {% endfor %}
       {% for m in media %}
       {% set listed = m.in_sounds if m.kind == 'audio' else m.in_playlist %}
-      <button class="tile {{ 'playing' if m.playing else '' }}" data-tile="{{ m.name }}"
+      <button class="tile {{ 'playing' if m.playing else '' }}" data-tile="{{ m.name }}" data-folder="{{ m.folder }}"
               data-kind="{{ m.kind }}" data-listed="{{ '1' if listed else '' }}"
               data-size="{{ (m.size / 1048576) | round(1) }}" data-warning="{{ m.warning or '' }}">
         <span class="tile-media">{{ preview(m.name) }}
-          {% if m.playing %}<span class="badge badge-play">Playing</span>{% elif listed %}<span class="badge" title="In {{ 'sound' if m.kind == 'audio' else 'playlist' }}">{{ icon('check') }}</span>{% endif %}
+          {% if m.playing %}<span class="badge badge-play">Playing</span>{% elif listed %}<span class="badge" title="In what's playing">{{ icon('check') }}</span>{% endif %}
           {% if m.warning %}<span class="badge badge-warn" title="{{ m.warning }}">!</span>{% endif %}
+          <span class="pick-tick">{{ icon('check') }}</span>
         </span>
         <span class="tile-name">{{ m.name }}</span>
         <span class="tile-meta">{{ icon({'video': 'film', 'animation': 'gif', 'image': 'image', 'audio': 'music'}[m.kind], 'inline') }}{{ {'video': 'Video', 'animation': 'GIF', 'image': 'Image', 'audio': 'Music'}[m.kind] }} · {{ (m.size / 1048576) | round(1) }} MB</span>
@@ -325,9 +362,26 @@
       </button>
       {% endfor %}
     </div>
-    {% else %}
-    <p class="empty big">Nothing here yet. Tap <strong>Upload files</strong> to add videos, GIFs, images or music.</p>
-    {% endif %}
+    <p class="empty big" id="lib-empty" hidden></p>
+
+    {# Shown in Select mode, in place of the mini player. #}
+    <div class="selbar" id="selbar" hidden>
+      <span class="sel-count" id="sel-count" aria-label="0 selected">0</span>
+      <button class="btn small" data-sel="move">{{ icon('folder') }}Move</button>
+      <button class="btn small" data-sel="add">{{ icon('plus') }}Playlist</button>
+      <button class="icon-btn danger" data-sel="delete" aria-label="Delete selected">{{ icon('trash') }}</button>
+      <button class="icon-btn" data-sel="cancel" aria-label="Stop selecting">{{ icon('x') }}</button>
+    </div>
+
+    {# A list of choices (move to which folder, add to which playlist...), filled by app.js. #}
+    <dialog id="chooser" class="sheet" aria-labelledby="chooser-title">
+      <form method="dialog" class="sheet-inner">
+        <h2 id="chooser-title"></h2>
+        <p class="sub" id="chooser-sub" hidden></p>
+        <div class="chooser-list" id="chooser-list"></div>
+        <button value="" class="btn ghost wide">Cancel</button>
+      </form>
+    </dialog>
 
     <dialog id="sheet" class="sheet" aria-labelledby="sheet-title">
       <form method="dialog" class="sheet-inner">
@@ -338,6 +392,7 @@
         <p class="warn-text" id="sheet-warning" hidden></p>
         <button type="button" class="btn primary wide" id="sheet-play">{{ icon('play') }}<span>Play now</span></button>
         <button type="button" class="btn wide" id="sheet-add">{{ icon('plus') }}<span>Add to playlist…</span></button>
+        <button type="button" class="btn wide" id="sheet-move">{{ icon('folder') }}<span>Move to folder…</span></button>
         <div class="sheet-lists" id="sheet-lists" hidden>
           <p class="sub">Add to:</p>
           {% for p in status.saved %}<button type="button" class="btn wide list-choice" data-add-to="{{ p.name }}">{{ p.name }}</button>{% endfor %}

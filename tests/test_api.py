@@ -61,7 +61,7 @@ def test_upload_list_and_no_autoplay(client, ipc, cfg):
     assert media == [
         {"name": "Sea_Waves.mp4", "kind": "video", "size": len(MP4),
          "mtime": media[0]["mtime"], "in_playlist": False, "in_sounds": False,
-         "playing": False, "warning": None, "thumb": int(media[0]["mtime"])}
+         "playing": False, "warning": None, "thumb": int(media[0]["mtime"]), "folder": ""}
     ]
     assert list(cfg.incoming_dir.iterdir()) == []
 
@@ -669,3 +669,114 @@ def test_space_endpoint(client, cfg):
     assert data["free_bytes"] > 0
     assert data["reserve_bytes"] == cfg.reserve_mb * 1024 * 1024
     assert data["max_upload_bytes"] == cfg.max_upload_mb * 1024 * 1024
+
+
+
+# --- folders --------------------------------------------------------------------
+
+
+def folders(client):
+    return {f["path"]: f for f in client.get("/api/status").get_json()["folders"]}
+
+
+def test_folders_create_move_rename_delete(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("s.mp3", MP3)]:
+        post_file(client, name, data)
+    assert client.post("/api/folders", json={"name": "Japan"}).get_json()["path"] == "Japan"
+    assert client.post("/api/folders", json={"parent": "Japan", "name": " Night "}
+                       ).get_json()["path"] == "Japan/Night"
+    assert client.post("/api/folders", json={"name": "Japan"}).status_code == 409
+    assert client.post("/api/folders", json={"parent": "Nope", "name": "x"}).status_code == 404
+    assert client.post("/api/folders", json={"name": ""}).status_code == 400
+
+    res = client.post("/api/media/move",
+                      json={"files": ["a.mp4", "s.mp3"], "folder": "Japan/Night"})
+    assert res.get_json()["moved"] == 2
+    client.post("/api/media/move", json={"files": ["b.png"], "folder": "Japan"})
+    media = {m["name"]: m["folder"] for m in client.get("/api/media").get_json()["media"]}
+    assert media == {"a.mp4": "Japan/Night", "b.png": "Japan", "s.mp3": "Japan/Night"}
+    f = folders(client)
+    assert (f["Japan"]["count"], f["Japan"]["visuals"], f["Japan"]["audio"]) == (3, 2, 1)
+    assert f["Japan/Night"]["parent"] == "Japan" and f["Japan/Night"]["name"] == "Night"
+    assert client.post("/api/media/move", json={"files": ["x.mp4"], "folder": "Japan"}
+                       ).status_code == 404
+    assert client.post("/api/media/move", json={"files": ["a.mp4"], "folder": "Nope"}
+                       ).status_code == 404
+
+    client.post("/api/folders/rename", json={"path": "Japan", "name": "Tokyo"})
+    media = {m["name"]: m["folder"] for m in client.get("/api/media").get_json()["media"]}
+    assert media["a.mp4"] == "Tokyo/Night" and set(folders(client)) == {"Tokyo", "Tokyo/Night"}
+
+    # Moving a folder takes its files along; it can't go inside itself.
+    assert client.post("/api/folders/move", json={"path": "Tokyo", "parent": "Tokyo/Night"}
+                       ).status_code == 400
+    assert client.post("/api/folders/move", json={"path": "Tokyo/Night", "parent": ""}
+                       ).get_json()["path"] == "Night"
+    media = {m["name"]: m["folder"] for m in client.get("/api/media").get_json()["media"]}
+    assert media["a.mp4"] == "Night" and set(folders(client)) == {"Tokyo", "Night"}
+    client.post("/api/folders/move", json={"path": "Night", "parent": "Tokyo"})
+
+    # Deleting a folder keeps the files: they move up a level.
+    client.post("/api/folders/delete", json={"path": "Tokyo/Night"})
+    media = {m["name"]: m["folder"] for m in client.get("/api/media").get_json()["media"]}
+    assert media["a.mp4"] == "Tokyo" and set(folders(client)) == {"Tokyo"}
+    assert (ctl.library.dir / "a.mp4").exists()
+
+
+def test_upload_into_a_folder(client):
+    client.post("/api/folders", json={"name": "Inbox"})
+    post_file(client, "a.mp4", MP4, folder="Inbox")
+    media = {m["name"]: m["folder"] for m in client.get("/api/media").get_json()["media"]}
+    assert media == {"a.mp4": "Inbox"}
+
+
+def test_a_folder_in_a_playlist_stays_linked(client, ctl):
+    for name, data in [("a.mp4", MP4), ("b.png", PNG), ("c.png", PNG), ("s.mp3", MP3)]:
+        post_file(client, name, data)
+    client.post("/api/folders", json={"name": "Art"})
+    client.post("/api/media/move", json={"files": ["a.mp4", "s.mp3"], "folder": "Art"})
+    client.post("/api/saved/new", json={"name": "Mix"})
+    res = client.post("/api/saved/add", json={"name": "Mix", "folder": "Art"})
+    assert res.get_json()["added"]
+    client.post("/api/saved/add", json={"name": "Mix", "filename": "c.png"})
+    entry = state(ctl)["saved"]["Mix"]
+    assert entry["playlist"] == ["folder:Art", "c.png"] and entry["sounds"] == ["folder:Art"]
+    summary = next(p for p in client.get("/api/status").get_json()["saved"] if p["name"] == "Mix")
+    assert (summary["count"], summary["sound_count"]) == (2, 1)
+
+    # Playing it plays the folder's files.
+    client.post("/api/saved/load", json={"name": "Mix"})
+    st = state(ctl)
+    assert (st["playlist"], st["sounds"]) == (["a.mp4", "c.png"], ["s.mp3"])
+    # Adding to the folder later adds to what's playing.
+    client.post("/api/media/move", json={"files": ["b.png"], "folder": "Art"})
+    assert state(ctl)["playlist"] == ["a.mp4", "b.png", "c.png"]
+    post_file(client, "d.png", PNG, folder="Art")
+    assert state(ctl)["playlist"] == ["a.mp4", "b.png", "d.png", "c.png"]
+    # Renaming the folder keeps the link.
+    client.post("/api/folders/rename", json={"path": "Art", "name": "Gallery"})
+    assert state(ctl)["saved"]["Mix"]["playlist"] == ["folder:Gallery", "c.png"]
+    # So does moving it into another folder.
+    client.post("/api/folders", json={"name": "Old"})
+    assert client.post("/api/folders/move", json={"path": "Gallery", "parent": "Old"}
+                       ).get_json()["path"] == "Old/Gallery"
+    assert state(ctl)["saved"]["Mix"]["playlist"] == ["folder:Old/Gallery", "c.png"]
+    assert state(ctl)["playlist"] == ["a.mp4", "b.png", "d.png", "c.png"]
+    client.post("/api/folders/move", json={"path": "Old/Gallery", "parent": ""})
+    # Deleting it turns the link into the files it had.
+    client.post("/api/folders/delete", json={"path": "Gallery"})
+    entry = state(ctl)["saved"]["Mix"]
+    assert entry["playlist"] == ["a.mp4", "b.png", "d.png", "c.png"]
+    assert entry["sounds"] == ["s.mp3"]
+    # Editing with a folder that doesn't exist is refused.
+    res = client.post("/api/saved/edit", json={"name": "Mix", "items": ["folder:Nope"]})
+    assert res.status_code == 404
+
+
+def test_deleted_file_leaves_its_folder(client, ctl):
+    post_file(client, "a.mp4", MP4)
+    client.post("/api/folders", json={"name": "F"})
+    client.post("/api/media/move", json={"files": ["a.mp4"], "folder": "F"})
+    client.delete("/api/media/a.mp4")
+    assert ctl.folders.load()["files"] == {}
+    assert folders(client)["F"]["count"] == 0

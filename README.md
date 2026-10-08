@@ -158,8 +158,9 @@ The tab bar at the bottom has four screens:
   playlists as one-tap buttons, an **Up next** strip of the playlist (tap a picture to show
   it now), and **Black screen**.
 - **Playlists**: your saved playlists, and the current artwork and sound lists.
-- **Library**: every file as a preview grid. Tap one for **Play now**,
-  **Add to / Remove from playlist** and **Delete**. Filter by *Artwork* or *Music*.
+- **Library**: every file as a preview grid, in folders. Tap one for **Play now**,
+  **Add to / Remove from playlist**, **Move to folder…** and **Delete**. Filter by
+  *Artwork* or *Music*.
 - **Settings**: display, network and advanced options.
 
 On every screen except **Now**, a mini player above the tab bar shows what's on the frame,
@@ -169,6 +170,23 @@ with pause and next.
 into a video) right after it's uploaded, in the background. For files that were already
 there, it makes them once after updating; that takes a few seconds per file on a Pi 4, and
 the placeholder icons fill in as they're ready. They're stored in `/var/lib/frame/thumbs`.
+
+### Folders
+The **Library** can be organised in folders (and folders in folders, up to 5 deep).
+- **New folder** makes one in the folder you're in. Tap a folder to open it; the path at the
+  top (*Library › Japan › Night*) takes you back up.
+- To move files, tap **Select**, tick them, then **Move** (or **Playlist** to add them all to
+  a playlist, or 🗑 to delete them). One file: tap it → **Move to folder…**.
+- **⋯** on a folder: **Add to playlist**, **Move to…**, **Rename**, **Delete folder**.
+  Deleting a folder never deletes files: what was in it moves up a level.
+- Uploading while you're inside a folder puts the files in that folder.
+- **A folder in a playlist stays linked**: the playlist plays everything in the folder (and
+  its subfolders, by name), so files you add to the folder later play too, and renaming or
+  moving the folder doesn't break it. If you delete the folder, the playlist keeps the files
+  it had. In the playlist picker, folders are at the top.
+
+Folders are only labels kept in `/var/lib/frame/library.json`: the files themselves stay
+in `/var/lib/frame/media/` with their names, so moving one never breaks anything.
 
 ### Playlists
 Playlists are built and edited on their own, like in a music app — **nothing on the frame
@@ -300,7 +318,7 @@ The UI uses a small JSON API that you can also script against:
 |---|---|---|
 | `GET /api/status` | | what's playing (`now`: position, count, next change), playlists, settings, player health |
 | `GET /api/media` | | list of files (+ free disk space) |
-| `POST /api/media` | multipart `file` (one or more; + optional `add=1` or `play=1`) | upload |
+| `POST /api/media` | multipart `file` (one or more; + optional `add=1` or `play=1`, `folder`) | upload |
 | `DELETE /api/media/<name>[?force=1]` | | delete (`force` is needed for files in the playlist or sound list) |
 | `POST /api/play` | `{"filename": "art.mp4"}` | show only this artwork |
 | `POST /api/add` | `{"filename": "art.mp4"}` | add to the playlist (or, for audio, the sound list) |
@@ -311,7 +329,12 @@ The UI uses a small JSON API that you can also script against:
 | `POST /api/stop` / `POST /api/start` | | black screen (keeps the playlist) / start again |
 | `POST /api/saved/new` | `{"name": "Sleeping"}` | a new, empty playlist (the frame doesn't change) |
 | `POST /api/saved/edit` | `{"name": "Sleeping"}` + any of `items`, `sounds`, `interval`, `shuffle`, `sound_interval`, `sound_shuffle`, `fade`, `rename` | change a playlist; the frame follows only if it's the one playing |
-| `POST /api/saved/add` | `{"name": "Sleeping", "filename": "a.mp4"}` | add a file to a playlist (music goes to its sound list) |
+| `POST /api/saved/add` | `{"name": "Sleeping", "filename": "a.mp4"}` or `{"name": "Sleeping", "folder": "Japan"}` | add a file to a playlist (music goes to its sound list), or link a folder |
+| `POST /api/folders` | `{"parent": "Japan", "name": "Night"}` | new folder (`parent` `""` = top of the library) |
+| `POST /api/folders/rename` | `{"path": "Japan/Night", "name": "Evening"}` | rename a folder |
+| `POST /api/folders/move` | `{"path": "Japan/Night", "parent": ""}` | move a folder (with its contents) |
+| `POST /api/folders/delete` | `{"path": "Japan"}` | delete a folder; its files move up a level |
+| `POST /api/media/move` | `{"files": ["a.mp4"], "folder": "Japan"}` | put files in a folder (`""` = no folder) |
 | `POST /api/saved` | `{"name": "Sleeping"}` | save what's playing as a playlist (replaces one with that name) |
 | `POST /api/saved/load` | `{"name": "Sleeping"}` | play a saved playlist |
 | `DELETE /api/saved/<name>` | | delete a saved playlist |

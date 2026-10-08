@@ -10,6 +10,9 @@ const readJSON = (el, key, fallback) => {
 const KINDS = readJSON(document.body, "kinds", {});      // filename -> kind
 const SAVED = readJSON(document.body, "saved", []);      // saved playlist names
 const LIVE = readJSON(document.body, "live", []);        // files in what's playing now
+const FOLDERS = readJSON(document.body, "folders", []);  // [{path, name, parent, count, ...}]
+let libFilter = "all";  // library: all / visual / audio
+const selected = new Set();  // library: files ticked in select mode
 const VISUAL = new Set(["video", "animation", "image"]);
 
 // --- feedback --------------------------------------------------------------
@@ -68,6 +71,8 @@ function currentView() {
   let hash = "";
   try { hash = decodeURIComponent(location.hash.slice(1)); } catch (_) { /* bad URL */ }
   if (VIEWS.includes(hash)) return hash;
+  // A folder in the Library: #library/<path>
+  if (hash.startsWith("library/")) return "library";
   // A playlist editor: #edit/<name>
   if (hash.startsWith("edit/") && $$(".view").some((v) => v.dataset.view === hash)) return hash;
   return "now";
@@ -83,6 +88,7 @@ function showView() {
     if (active) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
   document.body.classList.toggle("on-now", name === "now");
+  if (name === "library") renderLibrary();
 }
 window.addEventListener("hashchange", () => { showView(); scrollTo(0, 0); });
 showView();
@@ -119,6 +125,17 @@ function retryThumb(img) {
   }, 3000 + tries * 2000);
 }
 watchThumbs();
+
+// A folder's cover, copied from its Library tile.
+function folderPreviewOf(path) {
+  const tile = document.querySelector(`[data-folder-tile="${CSS.escape(path)}"] .tile-media`);
+  if (!tile) return [];
+  return Array.from(tile.children, (el) => {
+    const copy = el.cloneNode(true);
+    for (const img of $$("img", copy)) delete img.dataset.watched;
+    return copy;
+  });
+}
 
 // Copies of a file's preview elements, taken from its Library tile.
 function previewOf(name) {
@@ -386,7 +403,9 @@ function openPicker(ed, field) {
   const tiles = $("#picker-tiles");
   const names = Object.keys(KINDS).filter((n) => (KINDS[n] === "audio") === audio).sort(
     (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  if (!names.length) {
+  // Folders first: picking one adds the whole folder, which stays linked.
+  const folders = FOLDERS.filter((f) => (audio ? f.audio > 0 : f.visuals > 0 || f.count === 0));
+  if (!names.length && !folders.length) {
     tiles.innerHTML = "";
     const p = document.createElement("p");
     p.className = "empty";
@@ -394,21 +413,26 @@ function openPicker(ed, field) {
                           : "No artwork in the Library yet. Upload some first.";
     tiles.appendChild(p);
   } else {
-    tiles.replaceChildren(...names.map((name) => {
+    const entries = [
+      ...folders.map((f) => ({ value: `folder:${f.path}`, label: `📁 ${f.path}`,
+                              media: folderPreviewOf(f.path) })),
+      ...names.map((n) => ({ value: n, label: n, media: previewOf(n) })),
+    ];
+    tiles.replaceChildren(...entries.map(({ value: name, label: text, media: els }) => {
       const tile = document.createElement("button");
       tile.type = "button";
       tile.className = "tile pick" + (chosen.has(name) ? " chosen" : "");
       tile.dataset.pick = name;
       const media = document.createElement("span");
       media.className = "tile-media";
-      media.append(...previewOf(name));
+      media.append(...els);
       const tick = document.createElement("span");
       tick.className = "pick-tick";
       tick.innerHTML = '<svg class="i" aria-hidden="true"><use href="#i-check"/></svg>';
       media.appendChild(tick);
       const label = document.createElement("span");
       label.className = "tile-name";
-      label.textContent = name;
+      label.textContent = text;
       tile.append(media, label);
       tile.addEventListener("click", () => {
         const { tapped } = pickerState;
@@ -446,16 +470,259 @@ if (picker) {
 
 // --- library: filters and the action sheet ---------------------------------
 
+function currentFolder() {
+  let hash = "";
+  try { hash = decodeURIComponent(location.hash.slice(1)); } catch (_) { /* bad URL */ }
+  const path = hash.startsWith("library/") ? hash.slice("library/".length) : "";
+  return FOLDERS.some((f) => f.path === path) ? path : "";
+}
+
+function folderHash(path) {
+  return path ? `#library/${encodeURIComponent(path)}` : "#library";
+}
+
+// Show the folders and files of the folder we're in, and the path above it.
+function renderLibrary() {
+  const here = currentFolder();
+  let shown = 0;
+  for (const tile of $$("[data-folder-tile]")) {
+    tile.hidden = tile.dataset.parent !== here || libFilter !== "all";
+    if (!tile.hidden) shown += 1;
+  }
+  for (const tile of $$("[data-tile]")) {
+    const audio = tile.dataset.kind === "audio";
+    tile.hidden = tile.dataset.folder !== here
+      || (libFilter === "visual" && audio) || (libFilter === "audio" && !audio);
+    if (!tile.hidden) shown += 1;
+  }
+  const empty = $("#lib-empty");
+  if (empty) {
+    empty.hidden = shown > 0;
+    empty.textContent = here
+      ? "This folder is empty. Upload here, or use Select in another folder to move files in."
+      : "Nothing here yet. Tap Upload to add videos, GIFs, images or music.";
+  }
+  const crumbs = $("#crumbs");
+  if (crumbs) {
+    const parts = here ? here.split("/") : [];
+    const links = [["Library", ""], ...parts.map((p, i) => [p, parts.slice(0, i + 1).join("/")])];
+    crumbs.replaceChildren(...links.flatMap(([label, path], i) => {
+      const a = document.createElement(i === links.length - 1 ? "span" : "a");
+      a.textContent = label;
+      if (a.tagName === "A") a.href = folderHash(path);
+      if (i === 0) return [a];
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = "›";
+      return [sep, a];
+    }));
+    crumbs.hidden = !here;
+  }
+  const hint = $("#upload-folder-hint");
+  if (hint) {
+    hint.textContent = here ? `Uploads go into “${here}”.` : "";
+    hint.hidden = !here;
+  }
+}
+
 for (const btn of $$("[data-filter]")) {
   btn.addEventListener("click", () => {
-    const f = btn.dataset.filter;
+    libFilter = btn.dataset.filter;
     for (const b of $$("[data-filter]")) {
       b.classList.toggle("active", b === btn);
       b.setAttribute("aria-selected", String(b === btn));
     }
-    for (const tile of $$("[data-tile]")) {
-      const audio = tile.dataset.kind === "audio";
-      tile.hidden = (f === "visual" && audio) || (f === "audio" && !audio);
+    renderLibrary();
+  });
+}
+
+// --- choices sheet (which folder? which playlist?) ----------------------------
+
+const chooserDialog = $("#chooser");
+let chooserResolve = null;
+
+// The dialog's "close" event comes later, asynchronously; by then a click may have
+// answered and opened the next question, so only an unanswered question resolves null.
+function answerChooser(value) {
+  const resolve = chooserResolve;
+  chooserResolve = null;
+  if (resolve) resolve(value);
+}
+if (chooserDialog) {
+  chooserDialog.addEventListener("close", () => { if (!chooserDialog.open) answerChooser(null); });
+  chooserDialog.addEventListener("click", (e) => { if (e.target === chooserDialog) chooserDialog.close(); });
+}
+
+function choose(title, options, sub = "") {
+  return new Promise((resolve) => {
+    if (!chooserDialog) { resolve(null); return; }
+    answerChooser(null);
+    chooserResolve = resolve;
+    $("#chooser-title").textContent = title;
+    $("#chooser-sub").textContent = sub;
+    $("#chooser-sub").hidden = !sub;
+    const list = $("#chooser-list");
+    list.replaceChildren(...options.map((o) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn wide list-choice" + (o.ghost ? " ghost" : "") + (o.danger ? " danger" : "")
+        + (o.current ? " current" : "");
+      b.style.paddingLeft = `${18 + (o.depth || 0) * 18}px`;
+      b.textContent = o.label;
+      b.disabled = Boolean(o.disabled);
+      b.addEventListener("click", () => { answerChooser(o.value); chooserDialog.close(); });
+      return b;
+    }));
+    if (!chooserDialog.open) chooserDialog.showModal();
+  });
+}
+
+function folderOptions(exclude = null) {
+  const here = currentFolder();
+  return [
+    { label: "Library (no folder)", value: "/", current: here === "" },
+    ...FOLDERS.filter((f) => !(exclude && (f.path === exclude || f.path.startsWith(exclude + "/"))))
+      .map((f) => ({ label: `📁 ${f.name}`, value: f.path, depth: f.path.split("/").length - 1,
+                     current: f.path === here })),
+    { label: "＋ New folder…", value: "+new", ghost: true },
+  ];
+}
+
+async function chooseFolder(title) {
+  let path = await choose(title, folderOptions());
+  if (path === null) return null;
+  if (path === "+new") {
+    const name = askName("Name the new folder:");
+    if (!name) return null;
+    const made = await act("POST", "/api/folders", { parent: currentFolder(), name });
+    if (!made) return null;
+    path = made.path;
+  }
+  return path === "/" ? "" : path;
+}
+
+async function choosePlaylist(title, sub) {
+  const options = [...SAVED.map((n) => ({ label: n, value: n })),
+                   { label: "＋ New playlist…", value: "+new", ghost: true }];
+  const name = await choose(title, options, sub);
+  if (name !== "+new") return name;
+  const fresh = askName("Name the new playlist:");
+  if (!fresh) return null;
+  const made = await act("POST", "/api/saved/new", { name: fresh });
+  return made ? made.name : null;
+}
+
+async function moveFiles(files) {
+  const folder = await chooseFolder(files.length > 1 ? `Move ${files.length} files to…` : "Move to…");
+  if (folder === null) return;
+  await act("POST", "/api/media/move", { files, folder },
+            { reload: true, ok: `Moved to ${folder ? `“${folder}”` : "the Library"}` });
+}
+
+async function addFilesToPlaylist(files) {
+  const name = await choosePlaylist("Add to playlist", files.length > 1 ? `${files.length} files` : files[0]);
+  if (!name) return;
+  let added = 0;
+  for (const filename of files) {
+    const data = await act("POST", "/api/saved/add", { name, filename });
+    if (!data) return;
+    if (data.added) added += 1;
+  }
+  toast(added ? `Added ${added} to “${name}”` : `Already in “${name}”`);
+  reloadSoon(900);
+}
+
+// --- folders ------------------------------------------------------------------
+
+for (const btn of $$("[data-new-folder]")) {
+  btn.addEventListener("click", async () => {
+    const name = askName("Name the new folder:");
+    if (!name) return;
+    const made = await act("POST", "/api/folders", { parent: currentFolder(), name },
+                           { ok: `Created “${name}”` });
+    if (made) reloadSoon(500);
+  });
+}
+
+for (const btn of $$("[data-folder-menu]")) {
+  btn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const path = btn.dataset.folderMenu;
+    const name = path.split("/").pop();
+    const choice = await choose(`📁 ${name}`, [
+      { label: "Add to playlist… (stays linked)", value: "add" },
+      { label: "Move to…", value: "move" },
+      { label: "Rename", value: "rename" },
+      { label: "Delete folder (keeps the files)", value: "delete", danger: true },
+    ], path.includes("/") ? path : "");
+    if (choice === "add") {
+      const playlist = await choosePlaylist("Add folder to playlist",
+                                            "New files in the folder will play too.");
+      if (!playlist) return;
+      const data = await act("POST", "/api/saved/add", { name: playlist, folder: path });
+      if (data) { toast(data.added ? `Added “${name}” to “${playlist}”` : `Already in “${playlist}”`); reloadSoon(900); }
+    } else if (choice === "move") {
+      let target = await choose(`Move “${name}” into…`, folderOptions(path).filter((o) => o.value !== "+new"));
+      if (target === null) return;
+      target = target === "/" ? "" : target;
+      act("POST", "/api/folders/move", { path, parent: target }, { reload: true, ok: "Moved" });
+    } else if (choice === "rename") {
+      const fresh = askName("New folder name:", name);
+      if (!fresh || fresh === name) return;
+      act("POST", "/api/folders/rename", { path, name: fresh }, { reload: true, ok: "Renamed" });
+    } else if (choice === "delete") {
+      if (!confirm(`Delete the folder “${name}”? Its files are kept and move up a level.`)) return;
+      act("POST", "/api/folders/delete", { path }, { reload: true, ok: "Folder deleted" });
+    }
+  });
+}
+
+// --- select mode ----------------------------------------------------------------
+
+const selbar = $("#selbar");
+
+function setSelecting(on) {
+  document.body.classList.toggle("selecting", on);
+  if (selbar) selbar.hidden = !on;
+  if (!on) {
+    selected.clear();
+    for (const t of $$("[data-tile].chosen")) t.classList.remove("chosen");
+  }
+  const btn = $("#btn-select");
+  if (btn) btn.textContent = on ? "Done" : "Select";
+  updateSelection();
+}
+
+function updateSelection() {
+  const n = selected.size;
+  const count = $("#sel-count");
+  if (count) {
+    count.textContent = String(n);
+    count.setAttribute("aria-label", `${n} selected`);
+  }
+  for (const b of $$("[data-sel]")) if (b.dataset.sel !== "cancel") b.disabled = n === 0;
+}
+
+const selectBtn = $("#btn-select");
+if (selectBtn) {
+  selectBtn.addEventListener("click", () => setSelecting(!document.body.classList.contains("selecting")));
+}
+
+for (const b of $$("[data-sel]")) {
+  b.addEventListener("click", async () => {
+    const files = [...selected];
+    if (b.dataset.sel === "cancel") { setSelecting(false); return; }
+    if (!files.length) return;
+    if (b.dataset.sel === "move") await moveFiles(files);
+    else if (b.dataset.sel === "add") await addFilesToPlaylist(files);
+    else if (b.dataset.sel === "delete") {
+      if (!confirm(`Delete ${files.length} file${files.length === 1 ? "" : "s"}? They're also removed from your playlists. This can't be undone.`)) return;
+      for (const name of files) {
+        const url = `/api/media/${encodeURIComponent(name)}` + (LIVE.includes(name) ? "?force=1" : "");
+        if (!(await act("DELETE", url))) return;
+      }
+      toast(`Deleted ${files.length} file${files.length === 1 ? "" : "s"}`);
+      reloadSoon(800);
     }
   });
 }
@@ -491,7 +758,15 @@ function closeSheet() {
   else sheet.removeAttribute("open");
 }
 
-for (const tile of $$("[data-tile]")) tile.addEventListener("click", () => openSheet(tile));
+for (const tile of $$("[data-tile]")) {
+  tile.addEventListener("click", () => {
+    if (!document.body.classList.contains("selecting")) { openSheet(tile); return; }
+    const name = tile.dataset.tile;
+    if (selected.has(name)) selected.delete(name); else selected.add(name);
+    tile.classList.toggle("chosen", selected.has(name));
+    updateSelection();
+  });
+}
 
 if (sheet) {
   // Tap outside the sheet to close it.
@@ -502,6 +777,12 @@ if (sheet) {
     closeSheet();
     act("POST", audio ? "/api/soundtrack" : "/api/play", { filename: sheetName },
         { reload: true, ok: audio ? "Playing this music" : "Showing this artwork" });
+  });
+
+  $("#sheet-move").addEventListener("click", () => {
+    const name = sheetName;
+    closeSheet();
+    moveFiles([name]);
   });
 
   $("#sheet-add").addEventListener("click", () => {
@@ -563,6 +844,8 @@ function uploadOne(file, target, onProgress) {
     const form = new FormData();
     form.append("file", file, file.name);
     if (target) form.append("to", target);
+    const folder = currentFolder();
+    if (folder) form.append("folder", folder);
     let last = Date.now();
     let sent = false;
     const watchdog = setInterval(() => {

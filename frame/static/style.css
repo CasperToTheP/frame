@@ -500,3 +500,76 @@ a.saved-main { color: inherit; text-decoration: none; }
 .upload-to { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); font-size: .92rem; margin: 0 2px; }
 .list-choice.has::after { content: "✓ in it"; margin-left: auto; color: var(--accent); font-size: .85rem; }
 .space { margin: -8px 0 8px; font-size: .82rem; }
+
+/* --- library folders -------------------------------------------------------------- */
+.crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  margin: 14px 2px 0; font-weight: 700; font-size: 1.05rem;
+}
+.crumbs a { color: var(--muted); text-decoration: none; padding: 4px 0; }
+.crumbs .sep { color: var(--muted); font-weight: 400; }
+.crumbs span:last-child { overflow-wrap: anywhere; }
+.lib-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 10px; }
+.tool-buttons { display: flex; gap: 8px; margin: 4px 0 8px; }
+.tool-buttons .btn .i { width: 16px; height: 16px; }
+
+.folder-tile { position: relative; }
+.tile-hit { display: flex; flex-direction: column; gap: 2px; color: inherit; text-decoration: none; min-width: 0; }
+.tile:active .tile-hit .tile-media { transform: scale(.97); }
+.folder-tile .tile-media { background: var(--surface-2); border-color: var(--line); border-width: 1px; }
+.folder-tile .tile-name .i.inline { color: var(--accent); width: 15px; height: 15px; margin-right: 5px; }
+.corner-btn {
+  position: absolute; top: 6px; right: 6px; z-index: 1;
+  width: 36px; height: 36px; border-radius: 11px; border: 0;
+  display: grid; place-items: center;
+  background: rgba(0,0,0,.55); color: #fff;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.corner-btn .i { width: 18px; height: 18px; }
+body.selecting .folder-tile { opacity: .4; pointer-events: none; }
+
+.mosaic-cover { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; width: 100%; height: 100%; grid-area: 1 / 1; }
+.mosaic-cover .cell { display: grid; overflow: hidden; min-height: 0; }
+.mosaic-cover .cell > * { grid-area: 1 / 1; }
+.folder-badge {
+  grid-area: 1 / 1; align-self: end; justify-self: start; margin: 8px;
+  width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  background: rgba(0,0,0,.6); color: #fff;
+}
+.folder-badge .i { width: 17px; height: 17px; }
+.ph-folder { color: var(--accent); background: radial-gradient(circle at 30% 20%, var(--accent-soft), transparent 60%), linear-gradient(135deg, var(--surface-2), var(--surface)); }
+.thumb .folder-badge { margin: 3px; width: 20px; height: 20px; border-radius: 6px; }
+.thumb .folder-badge .i { width: 12px; height: 12px; }
+.folder-row .q-name .i.inline { color: var(--accent); }
+.folder-row .q-name small:not(.warn) { color: var(--muted); font-weight: 500; }
+
+/* Select mode: tick boxes on files, and a bar of actions over the tab bar. */
+.tile .pick-tick { display: none; }
+body.selecting [data-tile] .pick-tick, .tile.pick .pick-tick { display: grid; }
+body.selecting [data-tile].chosen .tile-media { border-color: var(--accent); }
+body.selecting [data-tile].chosen .pick-tick { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+body.selecting [data-tile] .badge:not(.badge-warn) { display: none; }
+.selbar {
+  position: fixed; z-index: 31; left: 8px; right: 8px;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 6px);
+  max-width: 744px; margin: 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px; border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.selbar .sel-count {
+  flex: none; min-width: 34px; height: 34px; padding: 0 8px; margin-right: auto;
+  display: grid; place-items: center; border-radius: 999px;
+  background: var(--accent); color: var(--accent-text); font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.selbar .btn.small { padding: 6px 10px; }
+.selbar .icon-btn { width: 38px; height: 38px; }
+body.selecting .mini { display: none; }
+
+/* Chooser sheet (which folder / which playlist) */
+.chooser-list { display: grid; gap: 8px; max-height: 60vh; overflow-y: auto; }
+.list-choice { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-choice.current { border-color: var(--accent); }
+.list-choice.current::after { content: "here"; margin-left: auto; color: var(--accent); font-size: .85rem; }

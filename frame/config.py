@@ -35,6 +35,11 @@ class Config:
         return self.data_dir / "media"
 
     @property
+    def library_file(self) -> Path:
+        # Folders: which folder each file is filed under (folders.py).
+        return self.data_dir / "library.json"
+
+    @property
     def thumb_dir(self) -> Path:
         return self.data_dir / "thumbs"
 

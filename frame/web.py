@@ -140,6 +140,7 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             media=media,
             media_index={m["name"]: m for m in media},
             kinds={m["name"]: m["kind"] for m in media},
+            folder_index={f["path"]: f for f in ctl.folder_summary()},
             rotations=ROTATIONS,
             fit_modes=FIT_MODES,
             scaling_modes=SCALING_MODES,
@@ -225,6 +226,10 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
             if warning:
                 log.warning("uploaded %s: %s", name, warning)
                 heavy.append(f"{name}: {warning}" if len(saved) > 1 else warning)
+        folder = request.form.get("folder")
+        if folder:
+            # Uploaded while looking at a folder: file them there.
+            ctl.move_files(saved, folder)
         target = request.form.get("to")
         if target:
             # Add to a saved playlist (artwork and music go to their own lists).
@@ -307,10 +312,37 @@ def create_app(cfg: Config | None = None, controller: Controller | None = None) 
     @app.post("/api/saved/add")
     def api_add_to_playlist():
         body = _json_body()
-        filename = body.get("filename")
-        if not isinstance(filename, str):
-            raise MediaError("filename is required")
-        return jsonify(ok=True, **ctl.add_to_playlist(body.get("name"), filename))
+        # {"name": ..., "filename": "a.mp4"} or {"name": ..., "folder": "Japan"}
+        return jsonify(ok=True, **ctl.add_to_playlist(body.get("name"), body.get("filename"),
+                                                      body.get("folder")))
+
+    @app.post("/api/folders")
+    def api_create_folder():
+        # {"parent": "Japan", "name": "Night"} - parent "" or missing = top level.
+        body = _json_body()
+        return jsonify(ok=True, **ctl.create_folder(body.get("parent", ""), body.get("name")))
+
+    @app.post("/api/folders/rename")
+    def api_rename_folder():
+        body = _json_body()
+        return jsonify(ok=True, **ctl.rename_folder(body.get("path"), body.get("name")))
+
+    @app.post("/api/folders/move")
+    def api_move_folder():
+        # {"path": "Japan/Night", "parent": ""} - "" = the top of the library.
+        body = _json_body()
+        return jsonify(ok=True, **ctl.move_folder(body.get("path"), body.get("parent")))
+
+    @app.post("/api/folders/delete")
+    def api_delete_folder():
+        # The folder's files move up a level; nothing is deleted from the SD card.
+        return jsonify(ok=True, **ctl.delete_folder(_json_body().get("path")))
+
+    @app.post("/api/media/move")
+    def api_move_media():
+        # {"files": ["a.mp4", ...], "folder": "Japan/Night"} - folder "" = top level.
+        body = _json_body()
+        return jsonify(ok=True, **ctl.move_files(body.get("files"), body.get("folder", "")))
 
     @app.post("/api/saved/load")
     def api_load_playlist():

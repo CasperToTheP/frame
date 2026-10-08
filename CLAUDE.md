@@ -105,8 +105,17 @@ Key rules:
   clear `active`, so they never change a saved playlist. The Director ignores all this.
   Settings from before `active` existed fall back to matching contents
   (`Controller.active_name`).
+- **Library folders** (`folders.py`) are labels in `/var/lib/frame/library.json`
+  (`{"folders": [...], "files": {name: "Japan/Night"}}`); media files stay flat in
+  `media/` with unique names, so moving never renames anything. A saved playlist may hold
+  `"folder:<path>"` items; the controller expands them (files in the folder and below, by
+  name) when the playlist is loaded or edited, and again when a folder's contents change
+  while it's playing (`_refresh_active`). The live `playlist`/`sounds` keys and the
+  Director only ever see filenames. Renaming or moving a folder rewrites the refs; deleting
+  one replaces its refs with the files it had.
 - **The UI** is one server-rendered page with four tab views (`#now`, `#playlists`,
-  `#library`, `#settings`) plus one editor view per saved playlist (`#edit/<name>`),
+  `#library`, `#settings`) plus one editor view per saved playlist (`#edit/<name>`)
+  and `#library/<folder path>` for library folders,
   switched by `app.js`; actions save and reload the page, which
   keeps the tab and scroll position.
 - **Thumbnails** (`thumbs.py`): a 480 px JPEG per visual in `/var/lib/frame/thumbs`, made
@@ -134,6 +143,7 @@ Key rules:
 | `/var/lib/frame/state.json` | persistent settings (see `state.DEFAULTS`) |
 | `/var/lib/frame/hang.json` | recent hang reboots and the file that was playing (written only by the player) |
 | `/var/lib/frame/tmp/` | waitress upload spool |
+| `/var/lib/frame/library.json` | library folders (which folder each file is in), written by frame-web |
 | `/var/lib/frame/thumbs/` | thumbnails (`<name>.jpg`), made and cleaned up by frame-web |
 | `/run/frame/mpv.sock` | artwork mpv IPC socket (`/run/frame` is created via `/etc/tmpfiles.d/frame.conf`) |
 | `/run/frame/audio.sock` | soundtrack mpv IPC socket |
